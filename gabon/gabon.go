@@ -5,20 +5,27 @@
 // administrative, à un rythme sans rapport avec les versions d'une API. Elle vit donc dans
 // son paquet, et un projet qui sert un autre pays n'emporte pas la table gabonaise.
 //
-// # Pourquoi la table livrée est presque vide
+// # D'où viennent les cinq entrées livrées, et pourquoi il n'y en a que cinq
 //
-// Une seule entrée est VÉRIFIÉE : la passerelle publie elle-même, dans sa collection de
-// requêtes d'exemple, le numéro 074111111 associé à AIRTEL_MONEY. Tout le reste
-// attendrait une source, et deviner coûterait cher : un mauvais appariement entre le
-// compte d'opération et l'opérateur est sanctionné par le code 3017, au comptoir, devant
-// un client qui attend. Un préfixe inconnu rend donc faux, jamais un opérateur au hasard.
+// CHACUNE EST VÉRIFIÉE, AUCUNE N'EST DEVINÉE. Les cinq ont été confirmées le 22 octobre
+// 2026 par un appel kyc sur un numéro réel de chaque préfixe : la passerelle a rendu le
+// titulaire du compte, ce qui établit l'appariement. Le préfixe 74 était en outre déjà
+// publié par la passerelle, dans sa collection de requêtes d'exemple.
 //
-// L'autorité est l'appel get-operators de la passerelle, et un appel kyc confirme le
-// titulaire avant d'engager la transaction. Dès que cette liste est relevée, elle se pose
-// en une ligne :
+//	74, 76, 77 -> AIRTEL_MONEY
+//	62, 66     -> MOOV_MONEY
+//
+// Le reste du plan de numérotation attend une source, et deviner coûterait cher : un
+// mauvais appariement entre le compte d'opération et l'opérateur est sanctionné par le
+// code 3017, au comptoir, devant un client qui attend. Un préfixe inconnu rend donc faux,
+// jamais un opérateur au hasard.
+//
+// L'autorité sur le vocabulaire des opérateurs est l'appel get-operators de la passerelle,
+// qui ne dit RIEN des préfixes ; c'est kyc qui transforme une présomption de préfixe en
+// entrée de table. Un préfixe relevé ailleurs se pose en une ligne :
 //
 //	table := gabon.TableConnue()
-//	table["66"] = pvit.OperateurMoov // part significative, et non "066"
+//	table["65"] = pvit.OperateurMoov // part significative, et non "065"
 //	operateur, connu := table.Operateur(numero)
 package gabon
 
@@ -84,9 +91,14 @@ func NouvelleTable(prefixes map[string]pvit.Operateur) (Table, error) {
 	return table, nil
 }
 
-// tableConnue ne porte que ce qui est vérifié. Voir le commentaire du paquet.
+// tableConnue ne porte que ce qui est vérifié, préfixe par préfixe, par un appel kyc sur un
+// numéro réel. Voir le commentaire du paquet pour la date et la méthode.
 var tableConnue = Table{
 	"74": pvit.OperateurAirtel,
+	"76": pvit.OperateurAirtel,
+	"77": pvit.OperateurAirtel,
+	"62": pvit.OperateurMoov,
+	"66": pvit.OperateurMoov,
 }
 
 // TableConnue rend une copie de la correspondance vérifiée, à compléter par l'appelant.
@@ -120,9 +132,8 @@ func (t Table) Operateur(msisdn string) (pvit.Operateur, bool) {
 
 // OperateurDuNumero déduit l'opérateur par la table vérifiée livrée avec ce paquet.
 //
-// Elle rend faux pour tout préfixe que cette table ne porte pas, ce qui est le cas de la
-// plupart d'entre eux : voir le commentaire du paquet pour la raison, et [TableConnue]
-// pour compléter.
+// Elle rend faux pour tout préfixe que cette table ne porte pas : voir le commentaire du
+// paquet pour ce qui y est, et [TableConnue] pour compléter.
 func OperateurDuNumero(msisdn string) (pvit.Operateur, bool) {
 	return tableConnue.Operateur(msisdn)
 }

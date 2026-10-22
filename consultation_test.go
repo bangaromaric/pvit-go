@@ -21,8 +21,13 @@ func query(t *testing.T, brut string) url.Values {
 }
 
 // L'interrogation de statut est le MÉCANISME DE VÉRITÉ, pas un filet : le callback n'offre
-// aucune garantie de remise. Elle n'accepte que l'identifiant de la passerelle, et son
-// chemin n'est pas versionné.
+// aucune garantie de remise. Son chemin n'est pas versionné, et sa clé est la RÉFÉRENCE DU
+// MARCHAND, mesurée le 22 octobre 2026 contre la vraie passerelle.
+//
+// LA VERSION 0.1.0 DE CE TEST ÉPINGLAIT LA CROYANCE INVERSE, en attendant l'identifiant
+// dans le paramètre transactionId. C'est la leçon à ne pas perdre : un test fige une erreur
+// aussi solidement qu'une vérité. Les deux valeurs sont donc distinctes ici, pour qu'aucune
+// confusion ne puisse passer inaperçue.
 func TestLInterrogationDeStatutEnvoieLesTroisParametres(t *testing.T) {
 	t.Parallel()
 
@@ -36,8 +41,8 @@ func TestLInterrogationDeStatutEnvoieLesTroisParametres(t *testing.T) {
 	}`})
 
 	etat, err := client.Statut(t.Context(), pvit.DemandeStatut{
-		TransactionID: "PAY23102400001",
-		Operateur:     pvit.OperateurAirtel,
+		Reference: "REF1234567890",
+		Operateur: pvit.OperateurAirtel,
 	})
 	if err != nil {
 		t.Fatalf("Statut() err = %v, want nil", err)
@@ -65,7 +70,9 @@ func TestLInterrogationDeStatutEnvoieLesTroisParametres(t *testing.T) {
 
 	params := query(t, vue.Query)
 	attendus := map[string]string{
-		"transactionId":        "PAY23102400001",
+		// Le paramètre s'appelle transactionId et reçoit la RÉFÉRENCE. Le nom vient de la
+		// passerelle, la valeur de la mesure.
+		"transactionId":        "REF1234567890",
 		"accountOperationCode": compteAirtel,
 		"transactionOperation": "PAYMENT",
 	}
@@ -90,13 +97,18 @@ func TestLInterrogationDeStatutRefuseUneDemandeIncomplete(t *testing.T) {
 		wantChamp string
 	}{
 		{
-			nom:       "sans identifiant",
+			nom:       "sans reference",
 			demande:   pvit.DemandeStatut{Operateur: pvit.OperateurAirtel},
-			wantChamp: "transactionId",
+			wantChamp: "reference",
+		},
+		{
+			nom:       "reference en blancs seulement",
+			demande:   pvit.DemandeStatut{Reference: "   ", Operateur: pvit.OperateurAirtel},
+			wantChamp: "reference",
 		},
 		{
 			nom:       "operation inconnue",
-			demande:   pvit.DemandeStatut{TransactionID: "PAY1", Operateur: pvit.OperateurAirtel, Operation: "REFUND"},
+			demande:   pvit.DemandeStatut{Reference: "REF1", Operateur: pvit.OperateurAirtel, Operation: "REFUND"},
 			wantChamp: "transactionOperation",
 		},
 	}
@@ -449,7 +461,7 @@ func TestLOperateurEstExigeMemeQuandLeCompteEstImpose(t *testing.T) {
 			nom: "statut",
 			appeler: func() error {
 				_, err := client.Statut(t.Context(), pvit.DemandeStatut{
-					TransactionID:   "PAY1",
+					Reference:       "REF1234567890",
 					CompteOperation: compteAirtel, // compte impose, mais aucun operateur
 				})
 				return err
@@ -546,8 +558,8 @@ func TestUneSommeIllisibleDansUnStatutEstUneErreur(t *testing.T) {
 			b.programmer("status", reponse{statut: http.StatusOK, corps: c.corps})
 
 			etat, err := client.Statut(t.Context(), pvit.DemandeStatut{
-				TransactionID: "PAY1",
-				Operateur:     pvit.OperateurAirtel,
+				Reference: "REF1234567890",
+				Operateur: pvit.OperateurAirtel,
 			})
 			if c.wantErr != nil {
 				if !errors.Is(err, c.wantErr) {

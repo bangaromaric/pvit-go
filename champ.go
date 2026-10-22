@@ -88,8 +88,10 @@ func texteBorne(champ, valeur string, max int) error {
 // déjà, va interroger son statut ». Conséquence pour l'appelant : une référence stable
 // par tentative, persistée AVANT l'appel, et jamais régénérée pour un rejeu.
 //
-// Ne pas la confondre avec l'identifiant que la passerelle attribue de son côté, qui
-// vit dans [Initiation.TransactionID].
+// C'EST AUSSI LA CLÉ DE L'INTERROGATION DE STATUT, voir [DemandeStatut.Reference]. Elle
+// porte donc les deux bouts d'une tentative, et c'est ce qui rend sa persistance avant
+// l'appel non négociable. L'identifiant que la passerelle attribue de son côté, lui, est
+// informatif : il vit dans [Initiation.TransactionID].
 type Reference string
 
 // formeReference est la seule forme que la passerelle accepte.

@@ -95,7 +95,8 @@ La documentation de la passerelle les donne ensemble, et il y a une raison.
    et **invalide la recette d'intégration**, donc ferme le compte de production.
 3. **L'interrogation du statut.** Ce n'est pas un filet de sécurité, c'est le mécanisme de
    vérité : le callback de transaction n'est ni signé, ni horodaté, ni muni d'un identifiant
-   de remise, et sa politique de reprise n'est pas documentée.
+   de remise, et sa politique de reprise n'est pas documentée. **Sa clé est la référence du
+   marchand**, voir plus bas.
 
 Les deux premiers sans le troisième laissent des paiements dans un état inconnu dès la
 première remise perdue. Voir l'exemple de `AInterroger` pour la boucle, qui tient en quinze
@@ -229,12 +230,36 @@ if errors.As(err, &refus) {
 `context.Canceled` et `context.DeadlineExceeded` remontent **nus** : ce ne sont pas des
 erreurs de la passerelle, et les ranger parmi les indisponibilités les rendrait rejouables.
 
+## Interroger le statut : la clé est la référence
+
+```go
+etat, err := client.Statut(ctx, pvit.DemandeStatut{
+    Reference: tentative.Reference, // PAS l'identifiant de la passerelle
+    Operateur: tentative.Operateur,
+})
+```
+
+**Et non l'identifiant que la passerelle attribue**, bien que le paramètre s'appelle
+`transactionId` sur le fil et que la documentation de la passerelle affirme l'inverse. Mesuré
+le 22 octobre 2026 sur une seule et même transaction réussie :
+
+```
+reference   ABOMYED6GURXUKV5YLBS -> SUCCESS, montant 4500, frais 112,5
+identifiant PAY2210261373646     -> 4006 TRANSACTION_NOT_FOUND
+```
+
+Conséquence : `Initiation.TransactionID` est **informatif** et peut être vide. Ce qui se
+persiste avant l'appel et ce qui réconcilie après, c'est la référence.
+
 ## Deux réserves assumées
 
-**La table des préfixes gabonais est presque vide.** `pvit/gabon` ne porte qu'une entrée
-vérifiée, celle que la passerelle publie dans ses propres exemples. Deviner coûterait cher :
-un mauvais appariement entre le compte et l'opérateur est refusé au comptoir. L'autorité est
-`client.Operateurs(ctx, "GA")`, et `gabon.NouvelleTable` valide les clés que vous ajoutez.
+**La table des préfixes gabonais est incomplète, par construction.** `pvit/gabon` porte cinq
+entrées, chacune confirmée par un appel `kyc` sur un numéro réel du préfixe : `74`, `76` et
+`77` vers `AIRTEL_MONEY`, `62` et `66` vers `MOOV_MONEY`. Le plan de numérotation va plus
+loin, et deviner coûterait cher : un mauvais appariement entre le compte et l'opérateur est
+refusé au comptoir. `get-operators` donne le vocabulaire des opérateurs et rien sur les
+préfixes ; c'est `kyc` qui transforme une présomption en entrée de table, et
+`gabon.NouvelleTable` valide les clés que vous ajoutez.
 
 **Le nom de l'en-tête d'horodatage du webhook de reporting n'est pas publié** dans la
 documentation lue pour écrire ce module. Il n'est donc pas inventé : l'horodatage est un
@@ -249,6 +274,28 @@ bash verifier.sh
 
 Format, vet, modernizer, tests sous détecteur de course, exemples, absence de dépendance
 tierce en production, `go mod tidy`, et govulncheck s'il est installé.
+
+## Changements
+
+### v0.1.1, rupture d'API assumée
+
+`DemandeStatut.TransactionID string` devient `DemandeStatut.Reference Reference`. Le
+remplacement est **incompatible, et c'est le correctif** : un champ qui accepte les deux
+valeurs est exactement ce qui a laissé l'erreur atteindre une production. La confusion ne
+compile plus.
+
+Deux conséquences pour qui monte depuis `v0.1.0` :
+
+- renseigner `Reference` là où `TransactionID` était passé ;
+- `Payer` ne rend plus d'erreur sur un accusé sans identifiant de transaction. Si votre code
+  comptait sur ce refus, c'est la référence qui le remplace.
+
+`v0.1.0` reste servie par le proxy Go, et reste fausse sur ce point : elle interroge le
+statut avec une clé que la passerelle ne connaît pas, et ne tranche donc aucune tentative.
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE).
 
 ## Avertissement sur la mise en production
 

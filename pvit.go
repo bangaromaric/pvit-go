@@ -12,7 +12,7 @@ import (
 )
 
 // Version est la version de ce paquet, telle qu'elle part dans l'en-tête d'agent.
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 // BaseURLProduction est l'hôte de la passerelle.
 //

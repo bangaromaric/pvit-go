@@ -87,12 +87,13 @@ func ExampleClient_Payer() {
 // prédicats, et l'appelant y branche sa persistance. Sans cette boucle, la première
 // notification perdue laisse un paiement dans un état inconnu pour toujours.
 func ExampleAInterroger() {
+	// La tentative ne porte PAS l'identifiant de la passerelle : il n'entre dans aucune
+	// décision de cette boucle. C'est la référence qui interroge le statut.
 	type tentative struct {
-		reference     pvit.Reference
-		transactionID string
-		statut        pvit.Statut
-		initiee       time.Time
-		essais        int
+		reference pvit.Reference
+		statut    pvit.Statut
+		initiee   time.Time
+		essais    int
 	}
 
 	maintenant := time.Date(2026, time.October, 20, 8, 10, 0, 0, time.UTC)
@@ -113,7 +114,7 @@ func ExampleAInterroger() {
 			fmt.Println(t.reference, "abandonnee, a traiter a la main")
 			continue
 		}
-		// Ici, client.Statut(ctx, pvit.DemandeStatut{...}), puis
+		// Ici, client.Statut(ctx, pvit.DemandeStatut{Reference: t.reference, ...}), puis
 		// pvit.TransitionPermise(ancien, nouveau) avant d'ecrire le resultat.
 		fmt.Println(t.reference, "a redemander, prochaine tentative dans", attente)
 	}

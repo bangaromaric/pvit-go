@@ -28,8 +28,13 @@ func TestOperateurDuNumeroNormaliseEtNeDevineJamais(t *testing.T) {
 		{nom: "significatif nu", msisdn: "74111111", want: pvit.OperateurAirtel, wantConnu: true},
 		{nom: "avec tirets et points", msisdn: "+241-07.41-11.111", want: pvit.OperateurAirtel, wantConnu: true},
 
-		{nom: "prefixe absent de la table verifiee", msisdn: "066123456", wantConnu: false},
-		{nom: "autre prefixe absent de la table verifiee", msisdn: "+24177289878", wantConnu: false},
+		{nom: "76 confirme par kyc", msisdn: "076289878", want: pvit.OperateurAirtel, wantConnu: true},
+		{nom: "77 confirme par kyc", msisdn: "+24177289878", want: pvit.OperateurAirtel, wantConnu: true},
+		{nom: "62 confirme par kyc", msisdn: "062123456", want: pvit.OperateurMoov, wantConnu: true},
+		{nom: "66 confirme par kyc", msisdn: "066123456", want: pvit.OperateurMoov, wantConnu: true},
+
+		{nom: "prefixe absent de la table verifiee", msisdn: "065123456", wantConnu: false},
+		{nom: "autre prefixe absent de la table verifiee", msisdn: "+24111289878", wantConnu: false},
 
 		{nom: "trop court", msisdn: "7411111", wantConnu: false},
 		{nom: "trop long", msisdn: "741111111", wantConnu: false},
@@ -55,15 +60,16 @@ func TestOperateurDuNumeroNormaliseEtNeDevineJamais(t *testing.T) {
 	}
 }
 
-// La table livrée est presque vide, et c'est assumé : une seule entrée est vérifiée, par
-// l'exemple que la passerelle publie elle-même. L'autorité est son appel get-operators, et
-// ce test montre comment l'appelant complète la table le jour où il l'a relevée.
+// La table livrée ne porte que du vérifié, donc elle est incomplète par construction : le
+// plan de numérotation gabonais va plus loin que cinq préfixes. Ce test montre comment
+// l'appelant la complète le jour où il a relevé un préfixe de plus, et que l'ajout cohabite
+// avec les entrées livrées.
 func TestUneTableCompleteeParLAppelantEstPriseEnCompte(t *testing.T) {
 	t.Parallel()
 
 	table := gabon.TableConnue()
-	table["66"] = pvit.OperateurMoov
-	table["621"] = pvit.OperateurMoov
+	table["65"] = pvit.OperateurMoov
+	table["631"] = pvit.OperateurMoov
 
 	cas := []struct {
 		nom       string
@@ -71,11 +77,12 @@ func TestUneTableCompleteeParLAppelantEstPriseEnCompte(t *testing.T) {
 		want      pvit.Operateur
 		wantConnu bool
 	}{
-		{nom: "l entree verifiee reste", msisdn: "074111111", want: pvit.OperateurAirtel, wantConnu: true},
-		{nom: "un prefixe de deux chiffres ajoute", msisdn: "066123456", want: pvit.OperateurMoov, wantConnu: true},
-		{nom: "un prefixe de trois chiffres ajoute", msisdn: "062123456", want: pvit.OperateurMoov, wantConnu: true},
-		{nom: "le voisin du prefixe de trois reste inconnu", msisdn: "063123456", wantConnu: false},
-		{nom: "un prefixe toujours absent", msisdn: "077123456", wantConnu: false},
+		{nom: "les entrees verifiees restent", msisdn: "074111111", want: pvit.OperateurAirtel, wantConnu: true},
+		{nom: "une autre entree verifiee reste", msisdn: "066123456", want: pvit.OperateurMoov, wantConnu: true},
+		{nom: "un prefixe de deux chiffres ajoute", msisdn: "065123456", want: pvit.OperateurMoov, wantConnu: true},
+		{nom: "un prefixe de trois chiffres ajoute", msisdn: "063123456", want: pvit.OperateurMoov, wantConnu: true},
+		{nom: "le voisin du prefixe de trois reste inconnu", msisdn: "063223456", wantConnu: false},
+		{nom: "un prefixe toujours absent", msisdn: "011123456", wantConnu: false},
 	}
 
 	for _, c := range cas {
@@ -116,14 +123,40 @@ func TestTableConnueRendUneCopie(t *testing.T) {
 	t.Parallel()
 
 	premiere := gabon.TableConnue()
-	premiere["66"] = pvit.OperateurMoov
+	premiere["65"] = pvit.OperateurMoov
 
 	seconde := gabon.TableConnue()
-	if _, present := seconde["66"]; present {
-		t.Errorf("TableConnue() porte l entree 66 ajoutee a une autre copie, want une copie independante")
+	if _, present := seconde["65"]; present {
+		t.Errorf("TableConnue() porte l entree 65 ajoutee a une autre copie, want une copie independante")
 	}
-	if got, connu := gabon.OperateurDuNumero("066123456"); connu {
-		t.Errorf("OperateurDuNumero(066123456) = %q, connu apres ecriture dans une copie, want inconnu", got)
+	if got, connu := gabon.OperateurDuNumero("065123456"); connu {
+		t.Errorf("OperateurDuNumero(065123456) = %q, connu apres ecriture dans une copie, want inconnu", got)
+	}
+}
+
+// Les cinq entrées livrées sont une AFFIRMATION, et ce test la fige : chacune a été
+// confirmée le 22 octobre 2026 par un appel kyc sur un numéro réel du préfixe, qui a rendu
+// le titulaire du compte. En ajouter une sans cette preuve fait tomber ce test, et c'est
+// exactement ce qu'on veut : un préfixe deviné rend le code 3017 au comptoir.
+func TestLesCinqPrefixesVerifiesSontLivres(t *testing.T) {
+	t.Parallel()
+
+	want := gabon.Table{
+		"74": pvit.OperateurAirtel,
+		"76": pvit.OperateurAirtel,
+		"77": pvit.OperateurAirtel,
+		"62": pvit.OperateurMoov,
+		"66": pvit.OperateurMoov,
+	}
+
+	got := gabon.TableConnue()
+	if len(got) != len(want) {
+		t.Errorf("TableConnue() porte %d entrees, want %d: %v", len(got), len(want), got)
+	}
+	for prefixe, operateur := range want {
+		if got[prefixe] != operateur {
+			t.Errorf("TableConnue()[%q] = %q, want %q", prefixe, got[prefixe], operateur)
+		}
 	}
 }
 

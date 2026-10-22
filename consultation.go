@@ -14,10 +14,20 @@ import (
 
 // DemandeStatut interroge l'état d'une transaction.
 type DemandeStatut struct {
-	// TransactionID est l'identifiant que la passerelle a attribué, celui de
-	// [Initiation.TransactionID]. C'est la SEULE clé que cette API accepte : la référence
-	// du marchand ne lui suffit pas.
-	TransactionID string
+	// Reference est la référence du marchand, celle qui a servi à engager la transaction.
+	//
+	// C'EST LA CLÉ QUE CETTE API ACCEPTE, et non l'identifiant que la passerelle attribue.
+	// La version 0.1.0 de ce paquet affirmait l'inverse, d'après la documentation de la
+	// passerelle, et cette croyance a rendu un encaissement inopérant six heures en
+	// production. Mesuré le 22 octobre 2026, sur une seule et même transaction réussie :
+	//
+	//	reference ABOMYED6GURXUKV5YLBS -> SUCCESS, montant 4500, frais 112,5
+	//	identifiant PAY2210261373646   -> 4006 TRANSACTION_NOT_FOUND
+	//
+	// Le champ porte donc un [Reference] et non un texte : y passer un identifiant de
+	// transaction ne compile plus. C'est voulu. Un paramètre qui accepte les deux est
+	// exactement ce qui a laissé l'erreur atteindre une production.
+	Reference Reference
 
 	// Operateur choisit la clé secrète, et à défaut le compte d'opération.
 	Operateur Operateur
@@ -31,10 +41,17 @@ type DemandeStatut struct {
 
 // EtatTransaction est ce que la passerelle sait d'une transaction.
 type EtatTransaction struct {
+	// TransactionID est l'identifiant de la passerelle, s'il figure dans la réponse. Il
+	// est INFORMATIF : il sert au support et au rapprochement avec un export, jamais à
+	// interroger cette API, qui prend la référence.
 	TransactionID string
-	Reference     Reference
-	Statut        Statut
-	Montant       Montant
+
+	// Reference est la référence du marchand. À défaut d'être réécrite par la réponse,
+	// c'est celle qui a été demandée.
+	Reference Reference
+
+	Statut  Statut
+	Montant Montant
 
 	// Frais ne porte QUE les frais de la passerelle. Cette API ne rend pas les frais de
 	// l'opérateur, qui sont le second étage : seuls la notification et l'export les
@@ -65,9 +82,13 @@ type reponseStatut struct {
 // reprise n'est pas documentée : rien ne doit se créditer sur sa seule foi. Au delà d'un
 // délai raisonnable sans notification, le statut est incertain et doit être redemandé par
 // ici. Voir [AInterroger] et [ProchaineTentative] pour le rythme.
+//
+// LA CLÉ EST LA RÉFÉRENCE DU MARCHAND. Voir [DemandeStatut.Reference], qui porte la mesure
+// et la date.
 func (c *Client) Statut(ctx context.Context, d DemandeStatut) (EtatTransaction, error) {
-	if strings.TrimSpace(d.TransactionID) == "" {
-		return EtatTransaction{}, ChampInvalideError{Champ: "transactionId", Raison: "vide"}
+	reference := strings.TrimSpace(d.Reference.String())
+	if reference == "" {
+		return EtatTransaction{}, ChampInvalideError{Champ: "reference", Raison: "vide"}
 	}
 	operation := d.Operation
 	if operation == "" {
@@ -85,7 +106,10 @@ func (c *Client) Statut(ctx context.Context, d DemandeStatut) (EtatTransaction, 
 	}
 
 	query := url.Values{}
-	query.Set("transactionId", d.TransactionID)
+	// LE PARAMÈTRE S'APPELLE transactionId ET REÇOIT LA RÉFÉRENCE. Ce n'est pas une
+	// coquille : c'est le nom que la passerelle emploie sur le fil, et la valeur qu'elle
+	// accepte réellement. Ne pas « corriger » cette ligne en la lisant trop vite.
+	query.Set("transactionId", reference)
 	query.Set("accountOperationCode", compte)
 	query.Set("transactionOperation", string(operation))
 
@@ -109,10 +133,12 @@ func (c *Client) Statut(ctx context.Context, d DemandeStatut) (EtatTransaction, 
 
 	etat := EtatTransaction{Operation: operation}
 	etat.TransactionID = premierTexte(rep.TransactionID, rep.TransactionIDCC, rep.ReferenceID)
-	if etat.TransactionID == "" {
-		etat.TransactionID = d.TransactionID
-	}
 	etat.Reference = Reference(premierTexte(rep.Reference, rep.ReferenceCC))
+	if etat.Reference == "" {
+		// La réponse n'a pas réécrit la référence, mais l'appelant vient de la donner :
+		// la rendre vide ferait perdre la clé de l'état qu'on est en train de décrire.
+		etat.Reference = Reference(reference)
+	}
 	etat.Statut = LireStatut(premierTexte(rep.Statut))
 	// Les sommes propagent leur erreur : un montant illisible sur une réponse de statut
 	// rendrait zéro, et l'appelant créditerait zéro franc sur une transaction réussie.
@@ -231,6 +257,12 @@ type ReponseFrais struct {
 	// alors que la notification du même paiement annonce 155 : il y a deux étages de
 	// frais, et ce calculateur n'en montre qu'un. Seules la notification et l'export
 	// donnent la vérité complète.
+	//
+	// ET LES DEUX ÉTAGES SONT DES POURCENTAGES, non les forfaits que les exemples publiés
+	// laissent croire. Mesuré le 22 octobre 2026 sur un règlement réel de 4 500 francs :
+	// 112,50 de frais de passerelle, soit 2,5 %, puis 46,12 de frais d'opérateur EN PLUS,
+	// soit 4 658,62 débités pour 4 500 reversés. Un total estimé depuis les exemples
+	// aurait annoncé 4 505, faux d'un facteur trente.
 	TotalAnnonce Frais
 }
 

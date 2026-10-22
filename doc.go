@@ -6,9 +6,10 @@
 // lui-même, ne crée aucune goroutine et ne convertit aucune erreur en code HTTP.
 // Celui qui le câble garde ces trois politiques.
 //
-// # Trois faits qu'on ne devine pas
+// # Quatre faits qu'on ne devine pas
 //
-// Ils coûtent une journée chacun quand on les apprend par l'erreur.
+// Ils coûtent une journée chacun quand on les apprend par l'erreur, et le dernier a coûté
+// six heures de production à qui l'a appris ainsi.
 //
 //   - Les codes URL sont PAR API, les comptes sont PAR OPÉRATEUR. La passerelle place
 //     un segment opaque dans chaque chemin, et il y en a onze, un par API. Le code de
@@ -20,6 +21,11 @@
 //   - Le champ reference porte l'idempotence, et un 409 n'est pas une erreur. Rejouer une
 //     référence déjà vue rend le code 5000, qui veut dire « déjà initié, va interroger le
 //     statut ». Le traiter comme un échec crée un double paiement. Voir [ErrDejaInitiee].
+//   - L'INTERROGATION DE STATUT PREND CETTE MÊME RÉFÉRENCE, et non l'identifiant que la
+//     passerelle attribue, bien que son paramètre s'appelle transactionId et que sa
+//     documentation affirme le contraire. La version 0.1.0 de ce paquet a recopié cette
+//     affirmation : aucune tentative ne pouvait plus être tranchée, ni par notification ni
+//     par réconciliation. Voir [DemandeStatut.Reference], qui porte la mesure.
 //
 // # Ce que l'appelant doit écrire lui-même
 //

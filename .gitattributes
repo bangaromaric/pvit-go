@@ -1,0 +1,7 @@
+# Fins de ligne normalisees en LF dans le depot, quelle que soit la plateforme de travail.
+#
+# Ce fichier manquait tant que ce module vivait a l'interieur du depot Kaye, dont il heritait
+# le .gitattributes. Il est autonome depuis le 21 octobre 2026 : un clone sur Windows avec
+# core.autocrlf=true deroule alors un arbre en CRLF, ou `gofmt -l .` accuse TOUS les fichiers,
+# y compris ceux que personne n'a touches, et ou verifier.sh echoue sur son premier pas.
+* text=auto eol=lf

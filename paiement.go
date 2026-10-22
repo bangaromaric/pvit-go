@@ -94,14 +94,18 @@ func (r reponseTransaction) code() int {
 // arrive plus tard par notification, ou se redemande par [Client.Statut]. Rien ne doit se
 // créditer sur la foi de cet accusé.
 type Initiation struct {
-	// TransactionID est l'identifiant que la passerelle attribue.
+	// TransactionID est l'identifiant que la passerelle attribue, s'il figure dans
+	// l'accusé.
 	//
-	// IL EST INDISPENSABLE : c'est la seule clé que l'interrogation de statut accepte.
-	// Un accusé qui n'en porte pas rend donc une erreur, même avec un code de succès,
-	// parce que la tentative serait alors irréconciliable.
+	// IL EST INFORMATIF, et peut être vide. La version 0.1.0 de ce paquet le tenait pour
+	// indispensable et rendait une erreur en son absence, parce qu'elle croyait que
+	// l'interrogation de statut n'acceptait que lui. C'est la référence qui réconcilie :
+	// voir [DemandeStatut.Reference]. Refuser un accusé sans identifiant rendait donc en
+	// erreur un paiement réellement engagé, qui allait débiter le client.
 	TransactionID string
 
-	// Reference est la référence du marchand, celle qui porte l'idempotence.
+	// Reference est la référence du marchand. ELLE PORTE TOUT : l'idempotence à l'aller,
+	// et l'interrogation du statut au retour.
 	Reference Reference
 
 	// Statut est l'état rapporté, normalement l'attente.
@@ -339,8 +343,9 @@ func (c *Client) compteMarchand(impose string, operateur Operateur) (string, err
 
 // Payer engage un encaissement.
 //
-// ELLE NE RAPPORTE PAS UN PAIEMENT FAIT. La réponse porte l'attente et un identifiant, et
-// le résultat arrive par notification ou se redemande par [Client.Statut].
+// ELLE NE RAPPORTE PAS UN PAIEMENT FAIT. La réponse porte l'attente, et le résultat arrive
+// par notification ou se redemande par [Client.Statut], sous la RÉFÉRENCE qui vient d'être
+// employée.
 //
 // # LE CAS QUI COMPTE : UNE RÉFÉRENCE DÉJÀ VUE
 //
@@ -421,18 +426,11 @@ func lireInitiation(res resultat, reference Reference) (Initiation, error) {
 		}
 	}
 
-	identifiant, ok := rep.identifiant()
-	if !ok {
-		// Un succès sans identifiant est un ÉCHEC, et ce n'est pas de la rigueur
-		// gratuite : l'interrogation de statut n'accepte que cet identifiant. Sans lui, la
-		// tentative est irréconciliable, donc ni créditable ni opposable au support.
-		return Initiation{}, Erreur{
-			Operation: "paiement",
-			HTTP:      res.statut,
-			Message:   "accuse sans identifiant de transaction, la tentative serait irreconciliable",
-			motif:     ErrReponseIllisible,
-		}
-	}
+	// UN ACCUSÉ SANS IDENTIFIANT N'EST PAS UN ÉCHEC, et la version 0.1.0 avait tort d'en
+	// rendre une erreur. La tentative se réconcilie par sa référence, que l'appelant a
+	// persistée avant l'appel ; refuser ici laisserait un paiement engagé, donc un client
+	// prêt à être débité, du côté de l'échec.
+	identifiant, _ := rep.identifiant()
 
 	statut, _ := texte(rep.Statut)
 	message, _ := texte(rep.Message)

@@ -347,19 +347,23 @@ func TestUnContexteAnnuleRemonteNu(t *testing.T) {
 	}
 }
 
-// Un succès sans identifiant est un ÉCHEC, et ce n'est pas de la rigueur gratuite :
-// l'interrogation de statut n'accepte que cet identifiant. Sans lui, la tentative est
-// irréconciliable, donc ni créditable ni opposable au support.
-func TestUnAccuseSansIdentifiantEstUnEchec(t *testing.T) {
+// Un accusé sans identifiant RESTE EXPLOITABLE, et la version 0.1.0 en rendait une erreur.
+//
+// Elle croyait que l'interrogation de statut n'acceptait que l'identifiant de la passerelle,
+// donc qu'une tentative sans lui était irréconciliable. C'est la référence qui réconcilie, et
+// l'appelant l'a persistée avant l'appel : refuser ici rangeait du côté de l'échec un
+// paiement réellement engagé, qui allait débiter le client.
+func TestUnAccuseSansIdentifiantResteExploitable(t *testing.T) {
 	t.Parallel()
 
 	cas := []struct {
-		nom   string
-		corps string
+		nom        string
+		corps      string
+		wantStatut pvit.Statut
 	}{
-		{nom: "aucun identifiant", corps: `{"status_code":"200","status":"PENDING"}`},
-		{nom: "identifiant vide", corps: `{"status_code":"200","status":"PENDING","reference_id":""}`},
-		{nom: "identifiant nul", corps: `{"status_code":"200","status":"PENDING","reference_id":null}`},
+		{nom: "aucun identifiant", corps: `{"status_code":"200","status":"PENDING"}`, wantStatut: pvit.StatutEnAttente},
+		{nom: "identifiant vide", corps: `{"status_code":"200","status":"PENDING","reference_id":""}`, wantStatut: pvit.StatutEnAttente},
+		{nom: "identifiant nul", corps: `{"status_code":"200","status":"PENDING","reference_id":null}`, wantStatut: pvit.StatutEnAttente},
 		{nom: "corps vide", corps: `{}`},
 	}
 
@@ -369,9 +373,18 @@ func TestUnAccuseSansIdentifiantEstUnEchec(t *testing.T) {
 			client, b := nouveauBancAvecReglages(t, reglagesAmorceSeule())
 			b.programmer("rest", reponse{statut: http.StatusOK, corps: c.corps})
 
-			_, err := client.Payer(t.Context(), demandeType())
-			if !errors.Is(err, pvit.ErrReponseIllisible) {
-				t.Errorf("Payer() sur %s err = %v, want ErrReponseIllisible", c.corps, err)
+			initiation, err := client.Payer(t.Context(), demandeType())
+			if err != nil {
+				t.Fatalf("Payer() sur %s err = %v, want nil", c.corps, err)
+			}
+			if got, want := initiation.Reference, pvit.Reference("REF1234567890"); got != want {
+				t.Errorf("Payer() Reference = %q, want %q: c est la cle de la reconciliation", got, want)
+			}
+			if got := initiation.TransactionID; got != "" {
+				t.Errorf("Payer() TransactionID = %q, want vide sur un accuse qui n en porte pas", got)
+			}
+			if got := initiation.Statut; got != c.wantStatut {
+				t.Errorf("Payer() Statut = %q, want %q", got, c.wantStatut)
 			}
 		})
 	}
