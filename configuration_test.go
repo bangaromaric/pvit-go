@@ -272,20 +272,24 @@ func TestUneOptionAbsurdeEmpecheLaConstruction(t *testing.T) {
 	}
 }
 
-// LA TRAPPE DE SORTIE. Les quatre API hors périmètre restent joignables, avec la rotation de
+// LA TRAPPE DE SORTIE. Les trois API hors périmètre restent joignables, avec la rotation de
 // clé et le classement d'erreurs, sans qu'il faille forker le paquet.
+//
+// La démonstration porte sur le PAIEMENT FRACTIONNÉ, qui est toujours dehors. Elle portait
+// sur le lien de paiement jusqu'à ce que celui-ci reçoive ses méthodes typées : démontrer
+// la trappe sur une API qui n'en a plus besoin ferait croire qu'elle y est encore.
 func TestLaTrappeDeSortieJointUnePIHorsPerimetre(t *testing.T) {
 	t.Parallel()
 
 	client, b := nouveauBanc(t)
 	b.programmer("renew-secret", reponse{statut: http.StatusOK, corps: corpsRenouvellement})
-	b.programmer("link", reponse{statut: http.StatusOK, corps: `{"statusCode":200,"url":"https://pay.test/abc"}`})
+	b.programmer("rest", reponse{statut: http.StatusOK, corps: corpsPaiement})
 
 	rep, err := client.Appeler(t.Context(), pvit.Appel{
 		Methode:   http.MethodPost,
-		CodeURL:   codeLien,
-		Chemin:    "link",
-		Versionne: false, // le lien est au chemin NON versionne, avec la charge utile v2
+		CodeURL:   codePaiement,
+		Chemin:    "rest",
+		Versionne: true, // le paiement fractionne partage le chemin versionne du paiement
 		Operateur: pvit.OperateurAirtel,
 		Corps: map[string]any{
 			"amount":                          150,
@@ -293,10 +297,20 @@ func TestLaTrappeDeSortieJointUnePIHorsPerimetre(t *testing.T) {
 			"merchant_operation_account_code": compteAirtel,
 			"transaction_type":                "PAYMENT",
 			"owner_charge":                    "CUSTOMER",
-			"operator_owner_charge":           "MERCHANT",
-			"service":                         "WEB",
-			"failed_redirection_url_code":     "FAILURE123",
-			"success_redirection_url_code":    "SUCCESS123",
+			"operator_code":                   "AIRTEL_MONEY",
+			"service":                         "RESTFUL",
+			"sharing_type":                    "PERCENT",
+			"beneficiaries": []map[string]any{{
+				"value":            85,
+				"beneficiary_code": "BEN123456",
+				"destination": map[string]any{
+					"kind":                   "MOBILE_MONEY",
+					"operator_code":          "AIRTEL_MONEY",
+					"msisdn":                 "24106000000",
+					"msisdn_type":            "MERCHANT",
+					"account_operation_code": compteMoov,
+				},
+			}},
 		},
 	})
 	if err != nil {
@@ -306,21 +320,21 @@ func TestLaTrappeDeSortieJointUnePIHorsPerimetre(t *testing.T) {
 	if got, want := rep.HTTP, http.StatusOK; got != want {
 		t.Errorf("Appeler() HTTP = %d, want %d", got, want)
 	}
-	if !strings.Contains(string(rep.Corps), "pay.test") {
-		t.Errorf("Appeler() corps = %s, want la charge utile du lien", rep.Corps)
+	if !strings.Contains(string(rep.Corps), "PAY23102400001") {
+		t.Errorf("Appeler() corps = %s, want la charge utile de la passerelle", rep.Corps)
 	}
 
-	vue := b.derniere(t, "link")
-	if got, want := vue.Chemin, "/"+codeLien+"/link"; got != want {
-		t.Errorf("Appeler() a appele %q, want %q sans prefixe de version", got, want)
+	vue := b.derniere(t, "rest")
+	if got, want := vue.Chemin, "/v2/"+codePaiement+"/rest"; got != want {
+		t.Errorf("Appeler() a appele %q, want %q", got, want)
 	}
 	if vue.Secret == "" {
 		t.Errorf("Appeler() n a pas porte de cle secrete, want celle du compte: la rotation doit servir aussi ici")
 	}
-	// L'asymétrie de nommage de la passerelle est passée telle quelle : le lien écrit
-	// operator_owner_charge là où le paiement écrit owner_charge_operator.
-	if !strings.Contains(vue.Corps, "operator_owner_charge") {
-		t.Errorf("Appeler() corps emis = %s, want le nom de champ du lien tel quel", vue.Corps)
+	// La charge utile passe TELLE QUELLE, y compris une structure imbriquée que les
+	// méthodes typées ne modélisent pas : c'est tout l'intérêt de la trappe.
+	if !contientTout(vue.Corps, "beneficiaries", "sharing_type", "msisdn_type") {
+		t.Errorf("Appeler() corps emis = %s, want la charge utile telle quelle", vue.Corps)
 	}
 }
 
@@ -396,7 +410,7 @@ func TestLaLectureDEnvironnementDecouvreLesComptes(t *testing.T) {
 		t.Errorf("Codes.Paiement = %q, want %q", got, want)
 	}
 	if r.Codes.Lien != "" {
-		t.Errorf("Codes.Lien = %q, want vide: les codes hors perimetre sont facultatifs", r.Codes.Lien)
+		t.Errorf("Codes.Lien = %q, want vide: les codes des API accessoires sont facultatifs au demarrage", r.Codes.Lien)
 	}
 	if got, want := len(r.Comptes), 3; got != want {
 		t.Errorf("LireEnvironnement() a decouvert %d comptes, want %d: %v", got, want, r.Comptes)
@@ -687,5 +701,60 @@ func TestDeuxOptionsIncompatiblesEmpechentLaConstruction(t *testing.T) {
 	}
 	if _, err := pvit.Nouveau(r, pvit.AvecDelais(time.Second, 2*time.Second)); err != nil {
 		t.Errorf("Nouveau(AvecDelais seule) err = %v, want nil", err)
+	}
+}
+
+// Les deux codes de redirection se lisent comme celui du callback, et sous des noms qui
+// reprennent le vocabulaire de la charge utile du lien.
+//
+// Le test taille aussi un retour à la ligne, qui est la faute réelle : un code recopié
+// depuis l'espace marchand emporte souvent celui de la fin de ligne, et il partait alors
+// tel quel dans la charge utile, où la passerelle le refusait par un 1003 que rien
+// n'expliquait. C'est la classe de bug que normaliserComptes a déjà fermée pour les
+// comptes, et elle ne doit pas rentrer par ces deux champs neufs.
+func TestLesCodesDeRedirectionSeLisentEtSeTaillent(t *testing.T) {
+	// Pas de t.Parallel : t.Setenv l'interdit.
+	t.Setenv("PVIT_URL_CODE_PAYMENT", codePaiement)
+	t.Setenv("PVIT_URL_CODE_STATUS", codeStatut)
+	t.Setenv("PVIT_ACCOUNT_AIRTEL_MONEY_CODE", compteAirtel)
+	t.Setenv("PVIT_ACCOUNT_AIRTEL_MONEY_SECRET", cleAmorce)
+	t.Setenv("PVIT_SUCCESS_REDIRECTION_URL_CODE", "  "+codeRedirectionSucces+"\n")
+	t.Setenv("PVIT_FAILED_REDIRECTION_URL_CODE", codeRedirectionEchec+"\r\n")
+
+	r, err := pvit.LireEnvironnement("")
+	if err != nil {
+		t.Fatalf("LireEnvironnement() err = %v, want nil", err)
+	}
+
+	if got, want := r.CodeRedirectionSucces, codeRedirectionSucces; got != want {
+		t.Errorf("CodeRedirectionSucces = %q, want %q: taille des espaces et du retour a la ligne", got, want)
+	}
+	if got, want := r.CodeRedirectionEchec, codeRedirectionEchec; got != want {
+		t.Errorf("CodeRedirectionEchec = %q, want %q: taille des espaces et du retour a la ligne", got, want)
+	}
+
+	// Et la taille doit survivre au passage par Nouveau, qui est le seul chemin que le
+	// code emprunte vraiment avant de partir sur le fil.
+	if _, err := pvit.NouveauDepuisEnvironnement(""); err != nil {
+		t.Fatalf("NouveauDepuisEnvironnement() err = %v, want nil", err)
+	}
+}
+
+// La sévérité est GRADUÉE, et ce test en est la garde du côté des codes de redirection.
+//
+// Un projet qui n'encaisse qu'en mobile money n'a aucune raison de réunir deux pages de
+// retour qu'il n'affichera jamais. Les exiger au démarrage ferait refuser de démarrer un
+// binaire parfaitement configuré pour ce qu'il fait, et c'est [Client.CreerLien] qui les
+// réclame, au moment où elles servent.
+func TestUnClientSansCodeDeRedirectionDemarreQuandMeme(t *testing.T) {
+	t.Parallel()
+
+	r := reglagesComplets()
+	r.BaseURL = "https://exemple.test"
+	r.CodeRedirectionSucces = ""
+	r.CodeRedirectionEchec = ""
+
+	if _, err := pvit.Nouveau(r); err != nil {
+		t.Errorf("Nouveau() err = %v, want nil: les codes de redirection ne sont exiges qu au moment du lien", err)
 	}
 }

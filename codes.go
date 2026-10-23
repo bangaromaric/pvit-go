@@ -40,14 +40,18 @@ type CodesURL struct {
 	// sur la correspondance entre un préfixe de numéro et un opérateur.
 	Operateurs string
 
-	// Lien est le code de l'API de lien de paiement. Hors du périmètre des méthodes
-	// typées de ce paquet, joignable par [Client.Appeler].
+	// Lien est le code de l'API de lien de paiement, celle qui porte aussi LE PAIEMENT
+	// PAR CARTE BANCAIRE. Voir [Client.CreerLien] et [Client.PayerParCarte].
+	//
+	// Il est vérifié au moment de l'appel, et non au démarrage : un projet qui n'encaisse
+	// qu'en mobile money n'a pas à le réunir.
 	Lien string
 
-	// QRCode est le code de l'API de génération de QR code. Même remarque.
+	// QRCode est le code de l'API de génération de QR code. Hors du périmètre des
+	// méthodes typées de ce paquet, joignable par [Client.Appeler].
 	QRCode string
 
-	// Rapport est le code de l'API d'export. Même remarque.
+	// Rapport est le code de l'API d'export. Même remarque que pour le QR code.
 	Rapport string
 }
 
@@ -69,7 +73,8 @@ type endpoint struct {
 	//
 	// IL N'EST PAS GLOBAL : la plupart des chemins sont sous /v2, mais status, balance et
 	// link ne le sont pas. Le serveur annoncé par la documentation porte pourtant le /v2,
-	// ce qui rend la faute très facile à commettre.
+	// ce qui rend la faute très facile à commettre. Le lien de paiement pousse l'écart
+	// jusqu'au bout : chemin de la version un, charge utile de la version deux.
 	versionne bool
 
 	// secret dit si l'appel porte l'en-tête de clé secrète.

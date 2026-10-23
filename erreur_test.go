@@ -3,6 +3,7 @@ package pvit
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,11 @@ func TestLesCodesNommesTombentSurLaBonneConduite(t *testing.T) {
 		{nom: "montant trop eleve", code: CodeMontantMaxDepasse, wantMotif: ErrHorsBornes, wantPredicatNom: "bornes"},
 		{nom: "authentification", code: CodeAuthentificationEchouee, wantMotif: ErrAuthentification, wantPredicatNom: "authentification"},
 		{nom: "reference deja utilisee", code: CodeReferenceDejaUtilisee, wantMotif: ErrDejaInitiee, wantPredicatNom: "deja initiee"},
+		{nom: "lien de paiement deja consomme", code: CodeLienConsomme, wantMotif: ErrDejaInitiee, wantPredicatNom: "deja initiee"},
+		{nom: "code de redirection de succes inconnu", code: CodeRedirectionInvalide, wantMotif: ErrConfiguration, wantPredicatNom: "configuration"},
+		{nom: "code de redirection d echec inconnu", code: CodeRedirectionEchecInvalide, wantMotif: ErrConfiguration, wantPredicatNom: "configuration"},
+		{nom: "url de redirection de succes eteinte", code: CodeRedirectionInactive, wantMotif: ErrConfiguration, wantPredicatNom: "configuration"},
+		{nom: "url de redirection d echec eteinte", code: CodeRedirectionEchecInactive, wantMotif: ErrConfiguration, wantPredicatNom: "configuration"},
 		{nom: "transaction expiree", code: CodeTransactionExpiree, wantMotif: ErrRequeteInvalide},
 		{nom: "contrainte violee", code: CodeContrainteViolee, wantMotif: ErrRequeteInvalide, wantPredicatNom: "contrainte"},
 		{nom: "maintenance", code: CodeMaintenance, wantMotif: ErrIndisponible, wantRejouable: true},
@@ -69,6 +75,83 @@ func TestLesCodesNommesTombentSurLaBonneConduite(t *testing.T) {
 				if want := nom == c.wantPredicatNom; vrai != want {
 					t.Errorf("Erreur{Code: %d} predicat %q = %v, want %v", c.code, nom, vrai, want)
 				}
+			}
+		})
+	}
+}
+
+// Un lien consommé et une référence déjà vue mènent à LA MÊME CONDUITE, et c'est pourquoi
+// un seul prédicat répond pour les deux.
+//
+// Le danger est identique et il coûte de l'argent : dans les deux cas la tentative existe,
+// et la réaction naturelle, régénérer sous une référence neuve, ferait payer deux fois. Ce
+// que le test épingle en plus, c'est que le DIAGNOSTIC reste séparable par le code, pour
+// qu'un marchand lise « ce lien a déjà servi » et non « votre référence existe déjà ».
+func TestUnLienConsommeEtUneReferenceDejaVueMenentALaMemeConduite(t *testing.T) {
+	t.Parallel()
+
+	corps := map[int]string{
+		CodeReferenceDejaUtilisee: `{"status_code":5000,"error":"TRANSACTION_REFERENCE_ALREADY_EXISTS","message":"reference deja utilisee"}`,
+		CodeLienConsomme:          `{"status_code":5002,"error":"TRANSACTION_LINK_USED","message":"This transaction has been used"}`,
+	}
+
+	for code, corps := range corps {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			t.Parallel()
+
+			e := classer("lien", OperateurAirtel, http.StatusConflict, []byte(corps))
+
+			if !errors.Is(e, ErrDejaInitiee) {
+				t.Errorf("classer(code %d) motif = %v, want ErrDejaInitiee", code, e.motif)
+			}
+			if !e.EstDejaInitiee() {
+				t.Errorf("classer(code %d).EstDejaInitiee() = false, want true: la conduite est d interroger le statut", code)
+			}
+			if e.EstRejouable() {
+				t.Errorf("classer(code %d).EstRejouable() = true, want false: rejouer a l identique ne rendrait rien de neuf", code)
+			}
+			if got := e.Code; got != code {
+				t.Errorf("classer(code %d).Code = %d, want %d: le diagnostic doit rester separable de la conduite", code, got, code)
+			}
+		})
+	}
+}
+
+// Les quatre façons de se tromper sur les URL de redirection se corrigent TOUTES dans
+// l'espace marchand, et aucune ne doit nourrir une boucle de rejeu.
+//
+// Deux d'entre elles, 3012 et 3013, sortent de la plage 3000 qui est un refus de contrat :
+// l'URL existe, elle est juste éteinte, et s'acharner sur l'appel ne la rallumera pas. Ce
+// test est la garde de ce reclassement, et il épingle du même coup la décision de NE PAS
+// nommer un prédicat de plus pour une famille dont la conduite est déjà celle de la
+// configuration.
+func TestLesQuatreRefusDeRedirectionSontDesFautesDeConfiguration(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		code int
+		http int
+	}{
+		{code: CodeRedirectionInvalide, http: http.StatusBadRequest},
+		{code: CodeRedirectionEchecInvalide, http: http.StatusBadRequest},
+		{code: CodeRedirectionInactive, http: http.StatusForbidden},
+		{code: CodeRedirectionEchecInactive, http: http.StatusForbidden},
+	}
+
+	for _, c := range cas {
+		t.Run(strconv.Itoa(c.code), func(t *testing.T) {
+			t.Parallel()
+
+			e := Erreur{Code: c.code, HTTP: c.http, motif: motifDuCode(c.code)}
+
+			if !errors.Is(e, ErrConfiguration) {
+				t.Errorf("motifDuCode(%d) = %v, want ErrConfiguration", c.code, e.motif)
+			}
+			if !e.EstFauteDeConfiguration() {
+				t.Errorf("Erreur{Code: %d}.EstFauteDeConfiguration() = false, want true: le geste correctif est dans l espace marchand", c.code)
+			}
+			if e.EstRejouable() {
+				t.Errorf("Erreur{Code: %d}.EstRejouable() = true, want false: une url eteinte ne se rallume pas en rejouant", c.code)
 			}
 		})
 	}

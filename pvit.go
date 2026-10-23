@@ -12,7 +12,7 @@ import (
 )
 
 // Version est la version de ce paquet, telle qu'elle part dans l'en-tête d'agent.
-const Version = "0.1.1"
+const Version = "0.2.0"
 
 // BaseURLProduction est l'hôte de la passerelle.
 //
@@ -83,6 +83,26 @@ type Reglages struct {
 	// obligatoire au moment d'un paiement, où [DemandePaiement.CodeCallback] peut aussi
 	// la porter.
 	CodeCallback string
+
+	// CodeRedirectionSucces et CodeRedirectionEchec désignent les deux pages où la
+	// passerelle ramène le client à la fin d'un parcours par lien, carte bancaire
+	// comprise.
+	//
+	// CE SONT DES CODES, ET NON DES URL. Ils s'enregistrent dans le menu des URL de
+	// l'espace marchand, qui rend un code pour chaque adresse déclarée, et c'est ce code
+	// qui part dans la charge utile. Y mettre une adresse vaut un refus 1003 ou 1004.
+	//
+	// Ils sont facultatifs ici et obligatoires au moment d'un lien, selon la même
+	// sévérité graduée que les codes d'URL des API accessoires : un projet qui n'encaisse
+	// qu'en mobile money n'a pas à les réunir pour démarrer. [DemandeLien] et
+	// [DemandeCarte] peuvent aussi les porter, ce qui permet à un même client de servir
+	// une boutique en ligne et un comptoir avec deux jeux de pages de retour.
+	//
+	// LE RETOUR SUR LA PAGE DE SUCCÈS N'EST PAS UNE PREUVE DE PAIEMENT : c'est le client
+	// qui revient, pas la passerelle qui conclut. Seuls la notification et
+	// [Client.Statut] tranchent.
+	CodeRedirectionSucces string
+	CodeRedirectionEchec  string
 
 	// Comptes porte un compte d'opération par famille d'opérateur.
 	//
@@ -164,6 +184,7 @@ type options struct {
 	proprietaireFraisOperateur Proprietaire
 	tailleMaxCallback          int64
 	fenetreSignature           time.Duration
+	fraisOperateurPostman      bool
 
 	// delaisImposes et transportImpose se souviennent de ce que l'appelant a demandé, pour
 	// que [Nouveau] refuse une combinaison dont une moitié serait sans effet.
@@ -344,6 +365,11 @@ func AvecRejeuAuthentification(rejeux int) Option {
 //
 // Le défaut est [ServiceRestful], le seul parcours sans navigateur, donc le seul qui
 // tienne à un étal.
+//
+// ELLE NE VAUT QUE POUR L'API DE TRANSACTION. Un lien de paiement prend son service dans
+// sa demande, et jamais ici, pour une raison dirimante : le défaut de cette option est
+// justement le seul des quatre services que l'API de lien n'accepte pas. Voir
+// [DemandeLien.Service].
 func AvecService(s Service) Option {
 	return func(o *options) error {
 		switch s {
@@ -425,6 +451,31 @@ func AvecFenetreSignature(fenetre time.Duration) Option {
 	}
 }
 
+// AvecFraisOperateurEnOperatorOwnerCharge écrit le second étage de frais du LIEN sous le
+// nom que la collection de requêtes emploie, et non sous celui du tableau des champs.
+//
+// Les deux sources publiées par la passerelle se contredisent sur ce seul champ, et sur ce
+// seul point d'entrée. Le tableau des champs du lien écrit owner_charge_operator, comme
+// l'API de transaction ; la collection de requêtes, elle, écrit operator_owner_charge,
+// mots inversés. Personne n'a tranché, et le défaut de ce paquet suit le tableau des
+// champs, parce que c'est le nom que l'API de transaction emploie et que ce nom là a été
+// éprouvé contre le serveur.
+//
+// CE QUE COÛTE LE MAUVAIS CHOIX N'EST PAS UN REFUS : un champ que la passerelle ne lit pas
+// laisse le second étage de frais prendre SON défaut, et le marchand le découvre dans un
+// export, après avoir supporté des frais qu'il croyait mettre à la charge du client, ou
+// l'inverse. C'est pourquoi l'option existe plutôt qu'une livraison le jour où la réponse
+// arrive.
+//
+// Elle ne touche QUE le lien. L'API de transaction garde owner_charge_operator sans
+// condition, et un test l'épingle : sur un chemin qui marche, on ne renomme rien.
+func AvecFraisOperateurEnOperatorOwnerCharge() Option {
+	return func(o *options) error {
+		o.fraisOperateurPostman = true
+		return nil
+	}
+}
+
 // Client parle à la passerelle, et garde la clé secrète de chaque compte d'opération.
 //
 // Il est sûr d'emploi concurrent, et il le doit : il est appelé depuis des requêtes HTTP.
@@ -471,6 +522,8 @@ func Nouveau(r Reglages, options ...Option) (*Client, error) {
 
 	r.BaseURL = normaliserBaseURL(r.BaseURL)
 	r.CodeCallback = strings.TrimSpace(r.CodeCallback)
+	r.CodeRedirectionSucces = strings.TrimSpace(r.CodeRedirectionSucces)
+	r.CodeRedirectionEchec = strings.TrimSpace(r.CodeRedirectionEchec)
 	r.Codes = normaliserCodes(r.Codes)
 	r.Comptes = normaliserComptes(r.Comptes)
 

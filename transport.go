@@ -18,7 +18,8 @@ const (
 	enteteSecret = "X-Secret"
 
 	// enteteMediaTypeCallback demande le format des notifications. Il ne vaut que pour
-	// les paiements.
+	// les paiements, lien de paiement et carte bancaire compris, et jamais pour un
+	// remboursement, qui est synchrone et n'en émet aucune.
 	enteteMediaTypeCallback = "X-Callback-MediaType"
 )
 
@@ -169,10 +170,10 @@ func fermer(reponse *http.Response) {
 
 // Appel décrit une requête arbitraire sur la passerelle.
 //
-// C'est LA TRAPPE DE SORTIE du paquet. Les méthodes typées couvrent l'encaissement, et
-// quatre API restent dehors : le lien de paiement, le paiement fractionné, le QR code et
-// les exports. Elles sont joignables par ici, avec la rotation de clé et le classement
-// d'erreurs, qui sont la vraie valeur de ce paquet, sans qu'il faille le forker.
+// C'est LA TRAPPE DE SORTIE du paquet. Les méthodes typées couvrent l'encaissement, mobile
+// money et carte bancaire comprises, et trois API restent dehors : le paiement fractionné,
+// le QR code et les exports. Elles sont joignables par ici, avec la rotation de clé et le
+// classement d'erreurs, qui sont la vraie valeur de ce paquet, sans qu'il faille le forker.
 //
 // Ce qui passe par ici n'a pas de type de retour : l'appelant décode lui-même. Les
 // méthodes typées restent la surface tenue.
@@ -183,13 +184,12 @@ type Appel struct {
 	// CodeURL est le segment opaque de cette API, tel que l'espace marchand le donne.
 	CodeURL string
 
-	// Chemin est le dernier segment du chemin, par exemple link, reports ou
-	// generate-qr-code.
+	// Chemin est le dernier segment du chemin, par exemple reports ou generate-qr-code.
 	Chemin string
 
-	// Versionne dit si le chemin porte le préfixe de version. IL N'EST PAS GLOBAL : le
-	// lien de paiement, par exemple, est au chemin non versionné mais attend la charge
-	// utile de la version deux.
+	// Versionne dit si le chemin porte le préfixe de version. IL N'EST PAS GLOBAL :
+	// status et balance, par exemple, n'en portent pas, là où le QR code et les exports en
+	// portent un. La table interne des points d'entrée fait autorité pour les API typées.
 	Versionne bool
 
 	// Operateur choisit le compte dont la clé secrète part dans l'en-tête. La valeur zéro

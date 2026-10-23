@@ -142,8 +142,32 @@ const (
 	ServiceRestlink Service = "RESTLINK"
 
 	// ServiceVisaMastercard est le parcours par carte bancaire.
+	//
+	// Il n'existe AUCUN point d'entrée carte chez la passerelle : encaisser par Visa ou
+	// Mastercard, c'est demander un lien avec ce service, et rediriger le client vers
+	// l'URL rendue. Voir [Client.PayerParCarte].
 	ServiceVisaMastercard Service = "VISA_MASTERCARD"
 )
+
+// estUnLien dit si ce service est un des trois que l'API de lien accepte.
+//
+// [ServiceRestful] en est EXCLU, et c'est tout l'intérêt de cette fonction : il est le
+// parcours du chemin rest, celui qui pousse l'invite de code secret sur le téléphone sans
+// navigateur. L'envoyer au chemin link se ferait refuser par un code que rien n'explique,
+// alors que la faute est locale et se nomme ici.
+func (s Service) estUnLien() bool {
+	return s == ServiceWeb || s == ServiceVisaMastercard || s == ServiceRestlink
+}
+
+// exigeLeNumeroClient dit si ce service de lien réclame le numéro du payeur.
+//
+// La règle est celle du tableau de champs de la passerelle, qui donne
+// customer_account_number pour CONDITIONNEL sur le lien : la carte et le lien direct en
+// ont besoin, la page web non, puisqu'elle le demande elle-même au client. La tenir ici,
+// en un seul endroit, évite que la validation et la documentation divergent.
+func (s Service) exigeLeNumeroClient() bool {
+	return s == ServiceVisaMastercard || s == ServiceRestlink
+}
 
 // TypeOperation est le sens d'un mouvement d'argent.
 type TypeOperation string

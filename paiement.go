@@ -260,6 +260,16 @@ type champsCommuns struct {
 	InfoLibre      string
 	Frais          Proprietaire
 	FraisOperateur Proprietaire
+
+	// NumeroFacultatif relâche la seule exigence que tous les parcours ne partagent pas.
+	//
+	// LE ZÉRO EXIGE LE NUMÉRO, et ce sens n'est pas négociable : un champ dont l'oubli
+	// relâcherait une validation est un piège, et un jour quelqu'un ajoute une structure
+	// qui le laisse à faux sans y penser. Seul le parcours web du lien de paiement a le
+	// droit de s'en passer, parce que c'est la page de la passerelle qui le demande alors
+	// au client. Le contrôle de LONGUEUR, lui, reste inconditionnel : un numéro fourni
+	// est un numéro borné, quel que soit le parcours.
+	NumeroFacultatif bool
 }
 
 // manquesCommuns relève les violations que le paiement et le remboursement partagent.
@@ -282,10 +292,15 @@ func manquesCommuns(c champsCommuns) []error {
 	if operateur == "" {
 		manques = append(manques, ChampInvalideError{Champ: "operator_code", Raison: "vide"})
 	}
-	if strings.TrimSpace(numero) == "" {
-		manques = append(manques, ChampInvalideError{Champ: "customer_account_number", Raison: "vide"})
-	} else if err := texteBorne("customer_account_number", numero, maxNumeroClient); err != nil {
-		manques = append(manques, err)
+	switch {
+	case strings.TrimSpace(numero) == "":
+		if !c.NumeroFacultatif {
+			manques = append(manques, ChampInvalideError{Champ: "customer_account_number", Raison: "vide"})
+		}
+	default:
+		if err := texteBorne("customer_account_number", numero, maxNumeroClient); err != nil {
+			manques = append(manques, err)
+		}
 	}
 	if compte != "" {
 		if err := texteBorne("merchant_operation_account_code", compte, maxCodeOperation); err != nil {

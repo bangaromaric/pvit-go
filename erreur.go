@@ -15,7 +15,7 @@ import (
 // Des sentinelles plates, interrogeables par errors.Is, et non une hiérarchie de types :
 // ce qui intéresse l'appelant est « puis-je réessayer » et « est-ce ma faute », pas la
 // généalogie de l'erreur. La passerelle publie quatre-vingts codes, et ils se rangent
-// tous derrière l'une de ces dix réponses.
+// tous derrière l'une de ces douze réponses.
 //
 // Aucune ne porte de code HTTP, et c'est volontaire : ce paquet est une fondation, il ne
 // décide de rien d'applicatif. Le projet qui le câble tient son unique point de
@@ -44,11 +44,17 @@ var (
 	// de réconciliation ne s'acharnera pas sur un compte qu'elle ne peut pas réparer.
 	ErrRotationImpossible = fmt.Errorf("%w: cle secrete expiree et aucun mot de passe de rotation configure", ErrConfiguration)
 
-	// ErrDejaInitiee signale une référence déjà employée.
+	// ErrDejaInitiee signale une tentative qui existe déjà.
 	//
 	// CE N'EST PAS UN ÉCHEC. Le champ reference porte l'idempotence, et ce refus veut
 	// dire « cette tentative existe déjà, va interroger son statut ». La traiter comme
 	// une erreur et relancer sous une nouvelle référence créerait un double paiement.
+	//
+	// Elle couvre DEUX refus, parce que la conduite est la même : une référence déjà
+	// employée (code 5000) et un lien de paiement déjà consommé (code 5002). Dans le
+	// second cas, le client est allé au bout du parcours bancaire, et régénérer un lien
+	// sous une référence neuve le ferait payer deux fois. [Erreur.Code] distingue les
+	// deux diagnostics pour qui veut le dire au marchand dans ses mots.
 	ErrDejaInitiee = errors.New("transaction deja initiee sous cette reference")
 
 	// ErrRefusClient signale un compte client bloqué ou inconnu chez l'opérateur. Le
@@ -85,9 +91,9 @@ var (
 
 // Les codes applicatifs qui décident d'une conduite.
 //
-// Seize noms pour quatre-vingts codes, et c'est une décision. Les autres se rangent par
+// Vingt-et-un noms pour quatre-vingts codes, et c'est une décision. Les autres se rangent par
 // plage dans motifDuCode, et [Erreur.Nom] garde le nom du fournisseur verbatim pour le
-// journal. Nommer quatre-vingts constantes dont soixante-quatre ne pilotent aucune
+// journal. Nommer quatre-vingts constantes dont cinquante-neuf ne pilotent aucune
 // branche produirait du code mort, qui pourrit au premier code ajouté par la passerelle.
 const (
 	// CodeIPMarchandInvalide est le filtrage SORTANT : la passerelle ne reconnaît pas
@@ -100,11 +106,28 @@ const (
 	// typiquement un code d'URL d'un environnement avec un compte de l'autre.
 	CodeEnvironnementInvalide = 1001
 
+	// CodeRedirectionInvalide est un code d'URL de redirection de succès que la
+	// passerelle ne connaît pas. Il se déclare dans le menu Urls de l'espace marchand,
+	// et c'est son CODE, et non l'URL, qui part dans la charge utile du lien.
+	CodeRedirectionInvalide = 1003
+
+	// CodeRedirectionEchecInvalide est le même refus pour l'URL de redirection d'échec.
+	// La passerelle en distingue deux codes, ce qui dit lequel des deux corriger.
+	CodeRedirectionEchecInvalide = 1004
+
 	// CodeSoldeInsuffisant est le compte d'opération trop pauvre.
 	CodeSoldeInsuffisant = 2000
 
 	// CodePlafondAtteint est le plafond du compte d'opération.
 	CodePlafondAtteint = 2001
+
+	// CodeRedirectionInactive est une URL de redirection de succès connue mais
+	// désactivée. Le code existe, il est juste éteint dans l'espace marchand : la
+	// distinction avec 1003 est celle d'un code faux et d'un code au repos.
+	CodeRedirectionInactive = 3012
+
+	// CodeRedirectionEchecInactive est le même refus pour l'URL de redirection d'échec.
+	CodeRedirectionEchecInactive = 3013
 
 	// CodeClientBloque est un compte client bloqué chez l'opérateur.
 	CodeClientBloque = 3014
@@ -130,7 +153,13 @@ const (
 	// CodeReferenceDejaUtilisee est la référence déjà vue. Voir [ErrDejaInitiee].
 	CodeReferenceDejaUtilisee = 5000
 
-	// CodeTransactionExpiree est une transaction trop ancienne pour être reprise.
+	// CodeLienConsomme est un lien de paiement déjà utilisé. Voir [ErrLienConsomme] pour
+	// la conduite, qui n'est pas d'en régénérer un.
+	CodeLienConsomme = 5002
+
+	// CodeTransactionExpiree est une transaction trop ancienne pour être reprise. Pour un
+	// lien de paiement, c'est sa durée de vie qui est écoulée, et la passerelle ne publie
+	// cette durée nulle part.
 	CodeTransactionExpiree = 6000
 
 	// CodeContrainteViolee est la validation de champ, et son corps porte un tableau
@@ -165,8 +194,13 @@ const longueurMaxRaison = 256
 // paquet de fondation ne doit pas emballer la cause racine derrière des préfixes
 // successifs : [Erreur.Operation] dit ce qui était tenté, et le message reste une phrase.
 type Erreur struct {
-	// Operation dit ce qui était tenté, en un mot : paiement, remboursement, statut,
-	// frais, solde, kyc, renouvellement, operateurs, pays, appel.
+	// Operation dit ce qui était tenté, en un mot : paiement, carte, lien,
+	// remboursement, statut, frais, solde, kyc, renouvellement, operateurs, pays, appel.
+	//
+	// La carte et le lien se distinguent alors qu'ils partent au même point d'entrée,
+	// comme le paiement et le remboursement le font déjà : ce champ nomme l'INTENTION de
+	// l'appelant, qui est ce qu'une ligne de journal doit rendre, et non la route servie,
+	// que [Erreur.Chemin] porte.
 	Operation string
 
 	// Operateur est le compte concerné, quand l'appel en visait un.
@@ -270,9 +304,15 @@ func (e Erreur) EstRejouable() bool {
 	return errors.Is(e.motif, ErrIndisponible) || errors.Is(e.motif, ErrSoldeInsuffisant)
 }
 
-// EstDejaInitiee dit si la référence a déjà servi, donc s'il faut interroger le statut
-// au lieu de relancer.
-func (e Erreur) EstDejaInitiee() bool { return e.Code == CodeReferenceDejaUtilisee }
+// EstDejaInitiee dit si la tentative existe déjà, donc s'il faut interroger le statut au
+// lieu de relancer.
+//
+// Elle répond vrai pour les DEUX façons dont elle peut exister : une référence déjà
+// employée, et un lien de paiement déjà consommé. Un seul prédicat pour les deux, parce
+// qu'il n'y a qu'une conduite, et [Erreur.Code] reste là pour le diagnostic.
+func (e Erreur) EstDejaInitiee() bool {
+	return e.Code == CodeReferenceDejaUtilisee || e.Code == CodeLienConsomme
+}
 
 // EstRefusDuClient dit si c'est le compte du client qui est en cause, et non l'appel.
 func (e Erreur) EstRefusDuClient() bool {
@@ -293,6 +333,8 @@ func (e Erreur) EstFauteDeConfiguration() bool {
 	case e.Code >= 9000 && e.Code <= 9002:
 		return true
 	case e.Code == CodeOperateurCompteDesaccord:
+		return true
+	case e.Code == CodeRedirectionInactive, e.Code == CodeRedirectionEchecInactive:
 		return true
 	default:
 		return false
@@ -378,8 +420,11 @@ func classer(operation string, operateur Operateur, statut int, corps []byte) Er
 
 // motifDuCode range un code applicatif derrière une sentinelle, ou renonce.
 //
-// Les cas nommés passent AVANT les plages : 3017 est une faute de configuration alors que
-// le reste de la famille 3000 est un refus de contrat, et 3100 est une authentification.
+// Les cas nommés passent AVANT les plages, et trois d'entre eux sortent leur code de la
+// conduite que sa plage lui donnerait : 3017 est une faute de configuration alors que le
+// reste de la famille 3000 est un refus de contrat, 3012 et 3013 le sont aussi puisqu'une
+// URL de redirection éteinte se rallume dans l'espace marchand, et 3100 est une
+// authentification.
 func motifDuCode(code int) error {
 	switch {
 	case code == 0:
@@ -387,7 +432,7 @@ func motifDuCode(code int) error {
 
 	case code == CodeAuthentificationEchouee:
 		return ErrAuthentification
-	case code == CodeReferenceDejaUtilisee:
+	case code == CodeReferenceDejaUtilisee, code == CodeLienConsomme:
 		return ErrDejaInitiee
 	case code == CodeClientBloque, code == CodeClientInconnu:
 		return ErrRefusClient
@@ -396,6 +441,8 @@ func motifDuCode(code int) error {
 	case code == CodeSoldeInsuffisant, code == CodePlafondAtteint:
 		return ErrSoldeInsuffisant
 	case code == CodeOperateurCompteDesaccord:
+		return ErrConfiguration
+	case code == CodeRedirectionInactive, code == CodeRedirectionEchecInactive:
 		return ErrConfiguration
 	case code == CodeMaintenance, code == CodeServiceIndisponible, code == CodeEnvoiCleEchoue:
 		return ErrIndisponible

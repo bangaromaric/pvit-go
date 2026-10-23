@@ -235,3 +235,69 @@ func ExampleMontant() {
 	// 4 500 FCFA
 	// 3,5 XAF arrondi a 4 XAF
 }
+
+// Un encaissement par CARTE BANCAIRE, et les trois choses qu'il faut en retenir : il passe
+// par l'API de lien, l'adresse rendue mène au formulaire que la passerelle héberge, et le
+// SUCCESS de la réponse concerne la création du lien et jamais le paiement.
+func ExampleClient_PayerParCarte() {
+	// Un faux marchand, pour que l'exemple tourne sans réseau. Noter la casse mêlée et le
+	// code de retour ENTIER, qui sont la forme de ce point d'entrée.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"url":"https://checkout.mypvit.pro/PAY23102400001",` +
+			`"merchantReferenceId":"CMD20261023001","status":"SUCCESS","statusCode":200}`))
+	}))
+	defer srv.Close()
+
+	client, err := pvit.Nouveau(pvit.Reglages{
+		BaseURL: srv.URL,
+		Codes:   pvit.CodesURL{Paiement: "cpay", Statut: "cstat", Lien: "clink"},
+		// Les trois codes que la passerelle exige, tous déclarés dans l'espace marchand.
+		// Ce sont des CODES, et non des URL.
+		CodeCallback:          "CB1234567890",
+		CodeRedirectionSucces: "SUCCESS123",
+		CodeRedirectionEchec:  "FAILURE123",
+		Comptes: map[pvit.Operateur]pvit.Compte{
+			pvit.OperateurAirtel: {CodeOperation: "ACC_1AIRTEL", CleAmorce: "sk_live_amorce"},
+		},
+	}, pvit.AvecClientHTTP(srv.Client()))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// La référence est persistée AVANT l'appel : elle porte l'idempotence à l'aller, et
+	// l'interrogation du statut au retour.
+	lien, err := client.PayerParCarte(context.Background(), pvit.DemandeCarte{
+		Reference:    "CMD20261023001",
+		Montant:      4500,
+		NumeroClient: "074111111",
+		// L'opérateur ne part PAS sur le fil : il choisit le compte d'opération et la clé
+		// secrète. Pour une carte, c'est la famille que l'espace marchand a ouverte.
+		Operateur: pvit.OperateurAirtel,
+	})
+	if err != nil {
+		// Une tentative qui existe déjà, référence vue ou lien consommé, n'est pas un
+		// échec : il faut interroger son statut, et surtout pas régénérer un lien.
+		if errors.Is(err, pvit.ErrDejaInitiee) {
+			fmt.Println("tentative existante, interroger le statut de", lien.Reference)
+			return
+		}
+		fmt.Println(err)
+		return
+	}
+
+	// Rediriger le client vers cette adresse. Le formulaire bancaire est derrière.
+	fmt.Println("rediriger vers:", lien.URL)
+
+	// ET NE RIEN CRÉDITER ICI. Ce statut est celui de la CRÉATION du lien. Le client n'a
+	// pas encore vu le formulaire, et son retour sur la page de succès ne prouvera rien
+	// non plus : seuls la notification et [pvit.Client.Statut] tranchent.
+	fmt.Println("creation du lien:", lien.StatutCreation)
+	fmt.Println("paiement:", pvit.StatutEnAttente, "- attendre la notification")
+
+	// Output:
+	// rediriger vers: https://checkout.mypvit.pro/PAY23102400001
+	// creation du lien: SUCCESS
+	// paiement: PENDING - attendre la notification
+}

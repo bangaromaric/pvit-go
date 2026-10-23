@@ -40,6 +40,10 @@ const (
 	codeQRCode     = "CODEQR"
 	codeRapport    = "CODEREP"
 	codeCallback   = "CB1234567890"
+
+	// Les deux pages de retour d'un parcours par lien. Ce sont des CODES, et non des URL.
+	codeRedirectionSucces = "SUCCESS123"
+	codeRedirectionEchec  = "FAILURE123"
 )
 
 // Les deux comptes de production, un par famille d'opérateur.
@@ -124,7 +128,9 @@ func reglagesComplets() pvit.Reglages {
 			Frais: codeFrais, Solde: codeSolde, KYC: codeKYC, Pays: codePays,
 			Operateurs: codeOperateurs, Lien: codeLien, QRCode: codeQRCode, Rapport: codeRapport,
 		},
-		CodeCallback: codeCallback,
+		CodeCallback:          codeCallback,
+		CodeRedirectionSucces: codeRedirectionSucces,
+		CodeRedirectionEchec:  codeRedirectionEchec,
 		Comptes: map[pvit.Operateur]pvit.Compte{
 			pvit.OperateurAirtel: {CodeOperation: compteAirtel, MotDePasse: motDePasse},
 			pvit.OperateurMoov:   {CodeOperation: compteMoov, MotDePasse: motDePasse},
@@ -257,11 +263,40 @@ const (
 	corpsPaiement       = `{"status_code":"200","status":"PENDING","reference_id":"PAY23102400001","message":"transaction initiee"}`
 	corpsAuthRefusee    = `{"date":"24102023-143000","status_code":3100,"error":"AUTHENTICATION_FAILED","message":"cle refusee","path":"/v2/CODEPAY/rest"}`
 	corpsDejaInitiee    = `{"date":"24102023-143000","status_code":5000,"error":"TRANSACTION_REFERENCE_ALREADY_EXISTS","message":"reference deja utilisee","path":"/v2/CODEPAY/rest"}`
+
+	// L'accusé du lien, verbatim de la documentation. Noter les deux écarts avec celui de
+	// la transaction : la casse mêlée, et le code de retour ENTIER et non en chaîne.
+	corpsLien = `{"url":"https://checkout.mypvit.pro/PAY23102400001","merchantReferenceId":"REF1234567890","status":"SUCCESS","statusCode":200}`
+
+	corpsLienConsomme        = `{"date":"24102023-143000","status_code":5002,"error":"TRANSACTION_LINK_USED","message":"This transaction has been used","path":"/CODELINK/link"}`
+	corpsLienExpire          = `{"date":"24102023-143000","status_code":6000,"error":"TRANSACTION_EXPIRED","message":"This transaction has expired","path":"/CODELINK/link"}`
+	corpsRedirectionInactive = `{"date":"24102023-143000","status_code":3012,"error":"REDIRECTION_URL_NOT_ACTIVE","message":"This redirection URL is not active","path":"/CODELINK/link"}`
 )
 
 // demandeType rend un paiement valide, à surcharger au besoin.
 func demandeType() pvit.DemandePaiement {
 	return pvit.DemandePaiement{
+		Reference:    "REF1234567890",
+		Montant:      150,
+		Operateur:    pvit.OperateurAirtel,
+		NumeroClient: "074111111",
+	}
+}
+
+// demandeLienType rend un lien web valide, à surcharger au besoin.
+func demandeLienType() pvit.DemandeLien {
+	return pvit.DemandeLien{
+		Service:      pvit.ServiceWeb,
+		Reference:    "REF1234567890",
+		Montant:      150,
+		Operateur:    pvit.OperateurAirtel,
+		NumeroClient: "074111111",
+	}
+}
+
+// demandeCarteType rend un paiement par carte valide, à surcharger au besoin.
+func demandeCarteType() pvit.DemandeCarte {
+	return pvit.DemandeCarte{
 		Reference:    "REF1234567890",
 		Montant:      150,
 		Operateur:    pvit.OperateurAirtel,

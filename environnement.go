@@ -85,9 +85,12 @@ var codesLus = []struct {
 //
 //	PVIT_BASE_URL                              defaut https://api.mypvit.pro
 //	PVIT_CALLBACK_URL_CODE
+//	PVIT_SUCCESS_REDIRECTION_URL_CODE          exiges par un lien de paiement
+//	PVIT_FAILED_REDIRECTION_URL_CODE
 //	PVIT_URL_CODE_SECRET                       les onze codes, un par API
 //	PVIT_URL_CODE_PAYMENT, _STATUS, _FEES, _BALANCE, _KYC, _COUNTRIES, _OPERATORS
-//	PVIT_URL_CODE_LINK, _QRCODE, _REPORT       pour la trappe de sortie
+//	PVIT_URL_CODE_LINK                         exige par un lien ou un paiement par carte
+//	PVIT_URL_CODE_QRCODE, _REPORT              pour la trappe de sortie
 //	PVIT_ACCOUNT_<OPERATEUR>_CODE              le triplet d'un compte
 //	PVIT_ACCOUNT_<OPERATEUR>_SECRET
 //	PVIT_ACCOUNT_<OPERATEUR>_PASSWORD
@@ -108,10 +111,21 @@ var codesLus = []struct {
 func LireEnvironnement(prefixe string) (Reglages, error) {
 	prefixe = prefixeOuDefaut(prefixe)
 
+	// Les trois codes sont TAILLÉS ICI, comme le sont déjà les codes d'URL et les valeurs
+	// de compte. [Nouveau] les taille aussi, et ce double passage est voulu : un code
+	// recopié depuis l'espace marchand emporte souvent le retour à la ligne de la fin de
+	// ligne, et ce qui sort d'ici doit être directement lisible par un appelant qui
+	// inspecte les réglages avant de câbler, et non seulement par [Nouveau].
+	//
+	// Les noms des deux codes de redirection reprennent ceux des champs de la charge utile
+	// du lien, en capitales, comme CALLBACK_URL_CODE reprend callback_url_code : c'est le
+	// vocabulaire que l'espace marchand affiche à côté du code à recopier.
 	r := Reglages{
-		BaseURL:      os.Getenv(prefixe + "BASE_URL"),
-		CodeCallback: os.Getenv(prefixe + "CALLBACK_URL_CODE"),
-		Comptes:      make(map[Operateur]Compte),
+		BaseURL:               os.Getenv(prefixe + "BASE_URL"),
+		CodeCallback:          strings.TrimSpace(os.Getenv(prefixe + "CALLBACK_URL_CODE")),
+		CodeRedirectionSucces: strings.TrimSpace(os.Getenv(prefixe + "SUCCESS_REDIRECTION_URL_CODE")),
+		CodeRedirectionEchec:  strings.TrimSpace(os.Getenv(prefixe + "FAILED_REDIRECTION_URL_CODE")),
+		Comptes:               make(map[Operateur]Compte),
 	}
 	for _, lu := range codesLus {
 		*lu.champ(&r.Codes) = strings.TrimSpace(os.Getenv(prefixe + lu.suffixe))

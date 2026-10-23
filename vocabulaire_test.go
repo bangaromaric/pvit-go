@@ -182,3 +182,64 @@ func TestSeulsLesDeuxSensDeMouvementSontValides(t *testing.T) {
 		})
 	}
 }
+
+// Le piège du lien de paiement tient en une ligne : [ServiceRestful] est le DÉFAUT du
+// client, et c'est le seul des quatre services que l'API de lien n'accepte pas.
+//
+// L'envoyer au chemin link se ferait refuser par un code que rien n'explique, alors que la
+// faute est locale et vérifiable sans réseau. Ce test est la garde de cette exclusion, et
+// il couvre les quatre services pour qu'un cinquième, ajouté un jour, ne tombe pas dans le
+// lien par inadvertance.
+func TestSeulsTroisServicesSurQuatreSontDesServicesDeLien(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		service Service
+		want    bool
+	}{
+		{service: ServiceRestful, want: false},
+		{service: ServiceWeb, want: true},
+		{service: ServiceVisaMastercard, want: true},
+		{service: ServiceRestlink, want: true},
+		{service: "", want: false},
+		{service: "QUELQUE_CHOSE_DE_NEUF", want: false},
+	}
+
+	for _, c := range cas {
+		t.Run(string(c.service), func(t *testing.T) {
+			t.Parallel()
+			if got := c.service.estUnLien(); got != c.want {
+				t.Errorf("Service(%q).estUnLien() = %v, want %v", c.service, got, c.want)
+			}
+		})
+	}
+}
+
+// Le numéro du client est CONDITIONNEL sur le lien, et la condition est le service.
+//
+// La page web le demande elle-même au client, les deux autres parcours en ont besoin pour
+// joindre le payeur. Tenir la règle en une fonction nommée évite que la validation et la
+// documentation divergent, et ce test en épingle les deux sens : ce qui l'exige, et ce qui
+// n'a pas le droit de l'exiger.
+func TestSeulsLaCarteEtLeLienDirectExigentLeNumeroClient(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		service Service
+		want    bool
+	}{
+		{service: ServiceWeb, want: false},
+		{service: ServiceVisaMastercard, want: true},
+		{service: ServiceRestlink, want: true},
+		{service: ServiceRestful, want: false},
+	}
+
+	for _, c := range cas {
+		t.Run(string(c.service), func(t *testing.T) {
+			t.Parallel()
+			if got := c.service.exigeLeNumeroClient(); got != c.want {
+				t.Errorf("Service(%q).exigeLeNumeroClient() = %v, want %v", c.service, got, c.want)
+			}
+		})
+	}
+}

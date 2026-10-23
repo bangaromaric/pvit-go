@@ -54,17 +54,41 @@ func TransitionPermise(ancien, nouveau Statut) bool {
 // AInterroger dit s'il est temps de redemander le statut d'une tentative.
 //
 // Elle rend faux pour un statut final, qui ne bougera plus, et vrai dès que
-// [DelaiIncertitude] s'est écoulé depuis l'initiation. Un instant d'initiation nul vaut
-// « on ne sait pas quand », et la réponse est alors de demander : ne rien faire laisserait
-// la tentative en suspens pour toujours.
+// [DelaiIncertitude] s'est écoulé depuis l'initiation.
+//
+// POUR UN LIEN DE PAIEMENT, ET UNE CARTE BANCAIRE EN PARTICULIER, LE DÉLAI DE CE PAQUET
+// EST TROP COURT. Trois minutes est le délai que la documentation retient pour un parcours
+// sans navigateur, où le client n'a qu'un code secret à frapper. Devant un formulaire
+// bancaire, puis une authentification forte de sa banque, une tentative encore en attente
+// au bout de trois minutes est NORMALE et non douteuse. Combien de temps vit un lien n'est
+// publié nulle part, et ce paquet n'invente pas de seconde constante : voir
+// [AInterrogerApres], à qui l'appelant donne le délai qu'il connaît de son propre tunnel.
 func AInterroger(s Statut, initiee, maintenant time.Time) bool {
+	return AInterrogerApres(s, initiee, maintenant, DelaiIncertitude)
+}
+
+// AInterrogerApres est [AInterroger] avec un délai d'incertitude choisi par l'appelant.
+//
+// Elle existe pour le lien de paiement, dont le parcours met un humain dans la boucle et
+// dont la durée de vie n'est pas publiée : seul l'appelant sait combien de temps son tunnel
+// laisse à un client, et le lui demander vaut mieux que de fabriquer ici un second seuil
+// que rien n'appuie.
+//
+// Un instant d'initiation nul vaut « on ne sait pas quand », et la réponse est alors de
+// demander : ne rien faire laisserait la tentative en suspens pour toujours. Un délai
+// négatif est traité comme nul, selon la même règle que [ProchaineTentative] : c'est une
+// faute d'appel, et un paquet de fondation ne fait pas paniquer le programme qui l'utilise.
+func AInterrogerApres(s Statut, initiee, maintenant time.Time, delai time.Duration) bool {
 	if s.EstFinal() {
 		return false
 	}
 	if initiee.IsZero() {
 		return true
 	}
-	return !maintenant.Before(initiee.Add(DelaiIncertitude))
+	if delai < 0 {
+		delai = 0
+	}
+	return !maintenant.Before(initiee.Add(delai))
 }
 
 // barèmeTentatives est l'attente avant chaque réessai, puis l'abandon.
