@@ -156,5 +156,24 @@ func ReferenceAleatoire(prefixe string) (Reference, error) {
 // String rend la référence telle que la passerelle l'attend.
 func (r Reference) String() string { return string(r) }
 
+// taillee rend la référence débarrassée de ses espaces de bord.
+//
+// ELLE EXISTE POUR QUE LES DEUX BOUTS D'UNE TENTATIVE PARLENT DE LA MÊME CHOSE, et c'est
+// la leçon que normaliserComptes a déjà apprise au prix d'une erreur de transport que rien
+// n'expliquait : [NouvelleReference] taillait pour JUGER, puis la valeur brute partait sur
+// le réseau.
+//
+// Relevé par audit, et non par une panne : une référence portant une espace ou un retour à
+// la ligne passait la validation, partait sur le fil avec, et l'interrogation de statut,
+// qui taille elle aussi, la redemandait sans. Les deux moitiés d'une même tentative ne se
+// rejoignaient donc plus, ce qui est la forme exacte de la panne que ce paquet a déjà payée
+// six heures en production par un autre chemin. Un test l'épingle maintenant des deux
+// côtés.
+//
+// Toute émission et toute interrogation passent par ici. Les champs libres, eux, ne sont
+// pas taillés : ils ne portent aucune identité, et une espace finale dans une information
+// libre ne rend rien introuvable.
+func (r Reference) taillee() Reference { return Reference(strings.TrimSpace(string(r))) }
+
 // Absente dit si la référence n'est pas renseignée.
 func (r Reference) Absente() bool { return r == "" }

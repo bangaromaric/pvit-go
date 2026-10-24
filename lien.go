@@ -68,23 +68,28 @@ type requeteLien struct {
 
 // reponseLien est l'accusé que rend l'API de lien de paiement.
 //
-// Chaque champ entre en valeur brute, et deux noms sont lus par donnée. Ce n'est pas de la
-// prudence décorative : cette passerelle n'est pas cohérente d'un point d'entrée à l'autre,
-// le lien répond en casse mêlée avec un code ENTIER là où l'API de transaction répond en
-// soulignés avec une CHAÎNE, et déclarer un seul nom ferait échouer le décodage ENTIER sur
-// une variation de forme, c'est à dire précisément quand il ne faut pas échouer.
+// Chaque champ entre en valeur brute, et le code de retour est lu sous SES DEUX NOMS. Ce
+// n'est pas de la prudence décorative : cette passerelle n'est pas cohérente d'un point
+// d'entrée à l'autre, le lien répond en casse mêlée avec un code ENTIER là où l'API de
+// transaction répond en soulignés avec une CHAÎNE, et déclarer un seul nom ferait échouer le
+// décodage ENTIER sur une variation de forme, c'est à dire précisément quand il ne faut pas
+// échouer.
+//
+// LA RÉFÉRENCE N'EST PAS LUE ICI, et son champ n'est donc pas déclaré. La passerelle en
+// renvoie bien un écho, sous merchantReferenceId, mais celui qui fait autorité est celui que
+// l'appelant a persisté AVANT l'appel : c'est lui qui réconcilie, et le relire de la réponse
+// ne ferait que donner deux sources à une même vérité. Déclarer un champ qu'on décode sans
+// jamais le consulter laisserait croire qu'il sert.
 //
 // Une structure propre, et non [reponseTransaction] réemployée : celle-ci résoudrait un
 // identifiant de transaction que ce point d'entrée ne rend PAS, et le champ resterait vide
 // à vie en invitant la question « pourquoi ».
 type reponseLien struct {
-	URL         jsontext.Value `json:"url"`
-	ReferenceCC jsontext.Value `json:"merchantReferenceId"`
-	ReferenceSC jsontext.Value `json:"merchant_reference_id"`
-	Statut      jsontext.Value `json:"status"`
-	CodeCC      jsontext.Value `json:"statusCode"`
-	CodeSC      jsontext.Value `json:"status_code"`
-	Message     jsontext.Value `json:"message"`
+	URL     jsontext.Value `json:"url"`
+	Statut  jsontext.Value `json:"status"`
+	CodeCC  jsontext.Value `json:"statusCode"`
+	CodeSC  jsontext.Value `json:"status_code"`
+	Message jsontext.Value `json:"message"`
 }
 
 // code rend le code applicatif, quel que soit le nom et le type sous lequel il arrive.
@@ -398,6 +403,9 @@ func (c *Client) emettreLien(ctx context.Context, operation string, d DemandeLie
 	if err != nil {
 		return Lien{}, err
 	}
+	// La référence part TAILLÉE, et c'est la même valeur qui revient dans le [Lien] : voir
+	// Reference.taillee pour la panne que cette ligne ferme.
+	reference := d.Reference.taillee()
 
 	// Les trois codes suivent la même règle : la surcharge de l'appel, puis le défaut des
 	// réglages, puis le refus. La passerelle les donne pour facultatifs ou obligatoires
@@ -441,14 +449,19 @@ func (c *Client) emettreLien(ctx context.Context, operation string, d DemandeLie
 	}
 
 	requeteCorps := requeteLien{
-		Agent:             d.Agent,
-		Montant:           d.Montant,
-		Produit:           d.Produit,
-		Reference:         d.Reference,
-		Service:           d.Service,
-		CodeCallback:      codeCallback,
-		NumeroClient:      strings.TrimSpace(d.NumeroClient),
-		CompteMarchand:    compte,
+		Agent:          d.Agent,
+		Montant:        d.Montant,
+		Produit:        d.Produit,
+		Reference:      reference,
+		Service:        d.Service,
+		CodeCallback:   codeCallback,
+		NumeroClient:   strings.TrimSpace(d.NumeroClient),
+		CompteMarchand: compte,
+		// PAYMENT sans condition. La passerelle accepte aussi GIVE_CHANGE sur ce chemin,
+		// soit un remboursement par lien, qui n'est pas du périmètre de ces deux méthodes :
+		// [Client.Rembourser] le fait de façon SYNCHRONE, sans page de retour ni
+		// notification à attendre. Exposer le choix ici inviterait à produire un lien de
+		// remboursement dont personne n'a éprouvé le parcours.
 		TypeOperation:     OperationPaiement,
 		Frais:             d.Frais.ouDefaut(c.opts.proprietaireFrais),
 		InfoLibre:         d.InfoLibre,
@@ -483,12 +496,12 @@ func (c *Client) emettreLien(ctx context.Context, operation string, d DemandeLie
 		// La tentative existe déjà, sous sa référence ou sous son lien : l'appelant doit
 		// pouvoir interroger le statut, donc la référence revient avec l'erreur.
 		if errors.Is(err, ErrDejaInitiee) {
-			return Lien{Reference: d.Reference}, err
+			return Lien{Reference: reference}, err
 		}
 		return Lien{}, err
 	}
 
-	return lireLien(operation, res, d.Reference)
+	return lireLien(operation, d.Operateur, res, reference)
 }
 
 // codeOuDefaut rend le code imposé, taillé, ou le défaut quand il est absent.
@@ -509,18 +522,38 @@ func codeOuDefaut(impose, defaut string) string {
 //
 // La référence revient MÊME dans ce refus : la passerelle a pu consommer la tentative avant
 // de répondre de travers, et l'appelant doit pouvoir aller le vérifier.
-func lireLien(operation string, res resultat, reference Reference) (Lien, error) {
+//
+// # UN REFUS PEUT ARRIVER SOUS UN CODE DE SUCCÈS
+//
+// L'API de transaction répond déjà « status PENDING, status_code 200 » dans un corps de
+// 2xx : le statut et le code applicatif vivent donc dans le corps, et rien ne garantit que
+// ce chemin réserve ses refus aux codes 4xx. Un corps sans adresse mais porteur d'un code
+// connu est donc classé par ce code, et non rangé en vrac derrière
+// [ErrReponseIllisible] : le discriminant de cette passerelle est le code applicatif, et un
+// 3012 rendu « charge utile inexploitable » ne dirait pas au marchand d'aller rallumer son
+// URL de redirection.
+//
+// Le classement est CONDITIONNÉ à un code que motifDuCode reconnaît, et ce n'est pas un
+// détail : classer un 2xx à l'aveugle le ferait passer par motifDuStatut, dont le défaut est
+// [ErrIndisponible], donc REJOUABLE. Une boucle de réconciliation régénérerait alors des
+// liens sur une faute de configuration qu'aucun rejeu ne répare.
+func lireLien(operation string, operateur Operateur, res resultat, reference Reference) (Lien, error) {
 	var rep reponseLien
 	if err := json.Unmarshal(res.corps, &rep); err != nil {
 		return Lien{Reference: reference}, Erreur{
-			Operation: operation, HTTP: res.statut, motif: ErrReponseIllisible, cause: err,
+			Operation: operation, Operateur: operateur,
+			HTTP: res.statut, motif: ErrReponseIllisible, cause: err,
 		}
 	}
 
 	adresse, _ := texte(rep.URL)
 	if err := adresseUtilisable(adresse); err != nil {
+		if refus, connu := refusDansUnSucces(operation, operateur, res); connu {
+			return Lien{Reference: reference}, refus
+		}
 		return Lien{Reference: reference}, Erreur{
-			Operation: operation, HTTP: res.statut, motif: ErrReponseIllisible, cause: err,
+			Operation: operation, Operateur: operateur,
+			HTTP: res.statut, motif: ErrReponseIllisible, cause: err,
 		}
 	}
 
@@ -535,12 +568,34 @@ func lireLien(operation string, res resultat, reference Reference) (Lien, error)
 	}, nil
 }
 
+// refusDansUnSucces rend le refus que porte un corps de succès, et dit s'il en portait un.
+//
+// Elle ne s'appuie sur [classer] que lorsque le corps livre un code que motifDuCode sait
+// ranger. Sans cette garde, un corps de 2xx sans code reconnaissable retomberait sur
+// motifDuStatut, qui rend [ErrIndisponible] pour tout ce qui n'est pas un 4xx, donc un refus
+// RÉPUTÉ REJOUABLE là où il n'y a rien à rejouer.
+func refusDansUnSucces(operation string, operateur Operateur, res resultat) (Erreur, bool) {
+	e := classer(operation, operateur, res.statut, res.corps)
+	if e.Code == 0 || motifDuCode(e.Code) == nil {
+		return Erreur{}, false
+	}
+	return e, true
+}
+
 // adresseUtilisable refuse une adresse qu'on ne peut pas présenter à un client.
 //
 // Le contrôle de schéma n'est pas une coquetterie : l'adresse rendue par la passerelle finit
-// dans un en-tête de redirection ou dans un attribut de lien, chez l'appelant. Une valeur
-// relative, sans hôte, ou de schéma javascript recopiée là ouvrirait une REDIRECTION
-// OUVERTE, et c'est à ce paquet de la fermer, puisque c'est lui qui lit la réponse.
+// dans un en-tête de redirection ou dans un attribut de lien, chez l'appelant. Une valeur de
+// schéma javascript ou data recopiée là exécuterait du script dans la page du marchand, et
+// une valeur relative ou sans hôte enverrait le client sur une route du marchand qui
+// n'existe pas.
+//
+// CE QU'ELLE NE FAIT PAS, ET IL FAUT LE SAVOIR : elle n'épingle AUCUN hôte. Une adresse
+// https vers un domaine quelconque passe, parce que le domaine de la page de paiement n'est
+// publié nulle part comme une valeur fixe, et qu'y coder checkout.mypvit.pro ferait tomber
+// l'encaissement le jour où la passerelle en change. La confiance accordée ici est donc
+// celle du lien TLS vers la passerelle, et pas davantage. Un appelant qui veut la restreindre
+// a l'adresse en clair dans [Lien.URL] et peut la juger avant de rediriger.
 func adresseUtilisable(adresse string) error {
 	adresse = strings.TrimSpace(adresse)
 	if adresse == "" {
@@ -555,6 +610,14 @@ func adresseUtilisable(adresse string) error {
 	}
 	if analysee.Host == "" {
 		return errors.New("adresse de paiement sans hote: " + borner(adresse))
+	}
+	// Une adresse de paiement ne porte JAMAIS d'identifiants, et celle qui en porte est une
+	// anomalie à deux titres : la forme https://checkout.mypvit.pro@ailleurs.test/ a pour
+	// hôte réel ailleurs.test, ce qu'un client qui survole la barre d'adresse ne verra pas,
+	// et des identifiants recopiés dans un gabarit finiraient dans les journaux du marchand.
+	// Le refus ne peut rien casser : aucune réponse légitime n'en met.
+	if analysee.User != nil {
+		return errors.New("adresse de paiement portant des identifiants: " + borner(adresse))
 	}
 	return nil
 }

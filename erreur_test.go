@@ -400,3 +400,53 @@ func TestLeRepliSurLeCodeHTTP(t *testing.T) {
 		})
 	}
 }
+
+// Le DISCRIMINANT de toute la passerelle se lit dans LES DEUX CASSES.
+//
+// Relevé par audit. Les corps d'erreur publiés sont en soulignés, et classer ne déclarait
+// que ceux là. Mais l'API de lien de paiement répond en casse mêlée, code de retour
+// compris : un refus formulé dans sa propre casse rendait donc Erreur.Code à zéro, et le
+// classement retombait sur la plage du code HTTP, qui ne distingue pas les vingt-cinq cas
+// d'un 403 et dont le défaut est l'indisponibilité REJOUABLE.
+//
+// Le test épingle les deux casses et les deux types, puisque ce code s'écrit de quatre
+// façons selon l'endroit.
+func TestLeCodeApplicatifSeLitDansLesDeuxCasses(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		nom   string
+		corps string
+	}{
+		{nom: "soulignes, entier", corps: `{"status_code":3012,"error":"REDIRECTION_URL_NOT_ACTIVE"}`},
+		{nom: "soulignes, chaine", corps: `{"status_code":"3012","error":"REDIRECTION_URL_NOT_ACTIVE"}`},
+		{nom: "casse melee, entier", corps: `{"statusCode":3012,"error":"REDIRECTION_URL_NOT_ACTIVE"}`},
+		{nom: "casse melee, chaine", corps: `{"statusCode":"3012","error":"REDIRECTION_URL_NOT_ACTIVE"}`},
+	}
+
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			t.Parallel()
+
+			e := classer("lien", OperateurAirtel, http.StatusForbidden, []byte(c.corps))
+
+			if got, want := e.Code, CodeRedirectionInactive; got != want {
+				t.Errorf("classer(%s).Code = %d, want %d", c.corps, got, want)
+			}
+			if !errors.Is(e, ErrConfiguration) {
+				t.Errorf("classer(%s) motif = %v, want ErrConfiguration", c.corps, e.motif)
+			}
+			if !e.EstFauteDeConfiguration() {
+				t.Errorf("classer(%s).EstFauteDeConfiguration() = false, want true", c.corps)
+			}
+		})
+	}
+
+	// Et les deux noms ne se contredisent pas : celui des soulignés passe devant, puisque
+	// c'est la forme que les corps d'erreur publiés emploient.
+	e := classer("lien", OperateurAirtel, http.StatusForbidden,
+		[]byte(`{"status_code":3012,"statusCode":5002}`))
+	if got, want := e.Code, CodeRedirectionInactive; got != want {
+		t.Errorf("classer() avec les deux noms rend Code = %d, want %d: la forme publiee passe devant", got, want)
+	}
+}

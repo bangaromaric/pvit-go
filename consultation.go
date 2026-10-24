@@ -86,7 +86,7 @@ type reponseStatut struct {
 // LA CLÉ EST LA RÉFÉRENCE DU MARCHAND. Voir [DemandeStatut.Reference], qui porte la mesure
 // et la date.
 func (c *Client) Statut(ctx context.Context, d DemandeStatut) (EtatTransaction, error) {
-	reference := strings.TrimSpace(d.Reference.String())
+	reference := d.Reference.taillee().String()
 	if reference == "" {
 		return EtatTransaction{}, ChampInvalideError{Champ: "reference", Raison: "vide"}
 	}

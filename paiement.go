@@ -380,6 +380,9 @@ func (c *Client) Payer(ctx context.Context, d DemandePaiement) (Initiation, erro
 	if err != nil {
 		return Initiation{}, err
 	}
+	// La référence part TAILLÉE, et c'est la même valeur qui revient dans l'accusé : voir
+	// Reference.taillee pour la panne que cette ligne ferme.
+	reference := d.Reference.taillee()
 	codeCallback := strings.TrimSpace(d.CodeCallback)
 	if codeCallback == "" {
 		codeCallback = c.reglages.CodeCallback
@@ -398,7 +401,7 @@ func (c *Client) Payer(ctx context.Context, d DemandePaiement) (Initiation, erro
 		Agent:          d.Agent,
 		Montant:        d.Montant,
 		Produit:        d.Produit,
-		Reference:      d.Reference,
+		Reference:      reference,
 		Service:        c.opts.service,
 		CodeCallback:   codeCallback,
 		NumeroClient:   strings.TrimSpace(d.NumeroClient),
@@ -424,12 +427,12 @@ func (c *Client) Payer(ctx context.Context, d DemandePaiement) (Initiation, erro
 	})
 	if err != nil {
 		if errors.Is(err, ErrDejaInitiee) {
-			return Initiation{Reference: d.Reference}, err
+			return Initiation{Reference: reference}, err
 		}
 		return Initiation{}, err
 	}
 
-	return lireInitiation(res, d.Reference)
+	return lireInitiation(res, reference)
 }
 
 // lireInitiation décode un accusé de paiement.
@@ -471,12 +474,13 @@ func (c *Client) Rembourser(ctx context.Context, d DemandeRemboursement) (Rembou
 	if err != nil {
 		return Remboursement{}, err
 	}
+	reference := d.Reference.taillee()
 
 	corps, err := json.Marshal(requeteRemboursement{
 		Agent:          d.Agent,
 		Montant:        d.Montant,
 		Produit:        d.Produit,
-		Reference:      d.Reference,
+		Reference:      reference,
 		Service:        c.opts.service,
 		NumeroClient:   strings.TrimSpace(d.NumeroClient),
 		CompteMarchand: compte,
@@ -501,7 +505,7 @@ func (c *Client) Rembourser(ctx context.Context, d DemandeRemboursement) (Rembou
 	})
 	if err != nil {
 		if errors.Is(err, ErrDejaInitiee) {
-			return Remboursement{Reference: d.Reference}, err
+			return Remboursement{Reference: reference}, err
 		}
 		return Remboursement{}, err
 	}
@@ -517,7 +521,7 @@ func (c *Client) Rembourser(ctx context.Context, d DemandeRemboursement) (Rembou
 	message, _ := texte(rep.Message)
 	return Remboursement{
 		TransactionID: identifiant,
-		Reference:     d.Reference,
+		Reference:     reference,
 		Statut:        LireStatut(statut),
 		Code:          rep.code(),
 		Message:       tronquer(message),

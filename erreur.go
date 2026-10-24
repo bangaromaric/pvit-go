@@ -357,13 +357,35 @@ func (e Erreur) EstContrainteViolee() bool { return e.Code == CodeContrainteViol
 // entre en valeur brute, parce qu'un seul champ mal typé ne doit pas empêcher de lire le
 // code, qui est la seule information dont l'appelant a besoin pour décider.
 type corpsErreur struct {
-	Date       string                    `json:"date"`
-	StatusCode jsontext.Value            `json:"status_code"`
-	Nom        jsontext.Value            `json:"error"`
-	Message    jsontext.Value            `json:"message"`
-	Messages   []jsontext.Value          `json:"messages"`
-	Chemin     jsontext.Value            `json:"path"`
-	Champs     map[string]jsontext.Value `json:"errors"`
+	Date string `json:"date"`
+
+	// StatusCode et StatusCodeCC portent LE MÊME code sous les deux casses que la
+	// passerelle emploie.
+	//
+	// Les corps d'erreur publiés sont en soulignés, mais l'API de lien de paiement répond
+	// en casse mêlée, code de retour compris. Ne déclarer que les soulignés rendait donc
+	// le DISCRIMINANT DE TOUTE LA PASSERELLE illisible dès que ce point d'entrée refusait
+	// quelque chose dans sa propre casse : le refus retombait alors sur la plage du code
+	// HTTP, qui ne distingue pas vingt-cinq cas d'un 403, et une faute de configuration
+	// ressortait en indisponibilité rejouable.
+	StatusCode   jsontext.Value `json:"status_code"`
+	StatusCodeCC jsontext.Value `json:"statusCode"`
+
+	Nom      jsontext.Value            `json:"error"`
+	Message  jsontext.Value            `json:"message"`
+	Messages []jsontext.Value          `json:"messages"`
+	Chemin   jsontext.Value            `json:"path"`
+	Champs   map[string]jsontext.Value `json:"errors"`
+}
+
+// code rend le code applicatif, quelle que soit la casse sous laquelle il arrive.
+func (c corpsErreur) code() (int, bool) {
+	for _, brut := range []jsontext.Value{c.StatusCode, c.StatusCodeCC} {
+		if valeur, ok := codeApplicatif(brut); ok {
+			return valeur, true
+		}
+	}
+	return 0, false
 }
 
 // classer traduit une réponse de refus en [Erreur].
@@ -379,7 +401,7 @@ func classer(operation string, operateur Operateur, statut int, corps []byte) Er
 
 	var c corpsErreur
 	if err := json.Unmarshal(corps, &c); err == nil {
-		if code, ok := codeApplicatif(c.StatusCode); ok {
+		if code, ok := c.code(); ok {
 			e.Code = code
 		}
 		if nom, ok := texte(c.Nom); ok {

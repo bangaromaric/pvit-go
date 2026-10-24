@@ -374,6 +374,7 @@ func TestUnAccuseDeLienSansAdressePresentableEchoue(t *testing.T) {
 		{nom: "schema javascript", corps: `{"url":"javascript:alert(1)","statusCode":200}`},
 		{nom: "schema de donnees", corps: `{"url":"data:text/html,<h1>paye</h1>","statusCode":200}`},
 		{nom: "schema http mais sans hote", corps: `{"url":"https:///PAY1","statusCode":200}`},
+		{nom: "hote maquille par des identifiants", corps: `{"url":"https://checkout.mypvit.pro@ailleurs.test/PAY1","statusCode":200}`},
 		{nom: "corps illisible", corps: `pas du json`},
 	}
 
@@ -1280,5 +1281,209 @@ func TestLOptionDeNomDeFraisNeTouchePasLAPIDeTransaction(t *testing.T) {
 	}
 	if _, present := corps["operator_owner_charge"]; present {
 		t.Errorf("Payer() porte operator_owner_charge, want absent: le desaccord n existe que sur le chemin du lien")
+	}
+}
+
+// LA RÉFÉRENCE QUI PART EST CELLE QUI INTERROGE LE STATUT, espaces compris.
+//
+// Relevé par audit, et c'est la classe de panne la plus coûteuse de ce paquet :
+// NouvelleReference taillait la référence pour la JUGER, puis la valeur brute partait sur
+// le fil, tandis que Client.Statut, qui taille elle aussi, la redemandait sans. Une
+// référence recopiée avec un retour à la ligne partait donc sous une forme et se
+// redemandait sous une autre, et les deux moitiés de la tentative ne se rejoignaient plus.
+//
+// Le test couvre les QUATRE chemins qui portent une référence, et vérifie aussi que la
+// valeur rendue à l'appelant est bien celle qui est partie : persister autre chose que ce
+// que la passerelle a reçu rouvrirait le même écart d'un cran plus loin.
+// Les sous tests ne sont PAS parallèles entre eux, contrairement à la règle du dépôt : ils
+// partagent un seul banc, et deux d'entre eux lisent la dernière requête vue sur rest.
+func TestLaReferenceQuiPartEstCelleQuiInterrogeLeStatut(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sale   = "  REF1234567890\n"
+		propre = "REF1234567890"
+	)
+
+	client, b := nouveauBancAvecReglages(t, reglagesAmorceSeule())
+	b.programmer("link", reponse{statut: http.StatusOK, corps: corpsLien})
+	b.programmer("rest", reponse{statut: http.StatusOK, corps: corpsPaiement})
+	b.programmer("status", reponse{statut: http.StatusOK, corps: `{"status":"SUCCESS","amount":150,"fees":3.5}`})
+
+	t.Run("le lien par carte", func(t *testing.T) {
+		d := demandeCarteType()
+		d.Reference = pvit.Reference(sale)
+
+		lien, err := client.PayerParCarte(t.Context(), d)
+		if err != nil {
+			t.Fatalf("PayerParCarte() err = %v, want nil", err)
+		}
+		if got := decoder(t, b.derniere(t, "link").Corps)["reference"]; got != propre {
+			t.Errorf("reference emise = %q, want %q: la valeur brute ne doit pas partir sur le fil", got, propre)
+		}
+		if got := lien.Reference; got != propre {
+			t.Errorf("Lien.Reference = %q, want %q: l appelant doit persister ce qui est parti", got, propre)
+		}
+	})
+
+	t.Run("le paiement", func(t *testing.T) {
+		p := demandeType()
+		p.Reference = pvit.Reference(sale)
+
+		init, err := client.Payer(t.Context(), p)
+		if err != nil {
+			t.Fatalf("Payer() err = %v, want nil", err)
+		}
+		if got := decoder(t, b.derniere(t, "rest").Corps)["reference"]; got != propre {
+			t.Errorf("reference emise = %q, want %q", got, propre)
+		}
+		if got := init.Reference; got != propre {
+			t.Errorf("Initiation.Reference = %q, want %q", got, propre)
+		}
+	})
+
+	t.Run("le remboursement", func(t *testing.T) {
+		r := pvit.DemandeRemboursement{
+			Reference:    pvit.Reference(sale),
+			Montant:      150,
+			Operateur:    pvit.OperateurAirtel,
+			NumeroClient: "074111111",
+		}
+
+		rb, err := client.Rembourser(t.Context(), r)
+		if err != nil {
+			t.Fatalf("Rembourser() err = %v, want nil", err)
+		}
+		if got := decoder(t, b.derniere(t, "rest").Corps)["reference"]; got != propre {
+			t.Errorf("reference emise = %q, want %q", got, propre)
+		}
+		if got := rb.Reference; got != propre {
+			t.Errorf("Remboursement.Reference = %q, want %q", got, propre)
+		}
+	})
+
+	t.Run("l interrogation de statut", func(t *testing.T) {
+		if _, err := client.Statut(t.Context(), pvit.DemandeStatut{
+			Reference: pvit.Reference(sale),
+			Operateur: pvit.OperateurAirtel,
+		}); err != nil {
+			t.Fatalf("Statut() err = %v, want nil", err)
+		}
+		query := b.derniere(t, "status").Query
+		if !strings.Contains(query, "transactionId="+propre) {
+			t.Errorf("query = %q, want transactionId=%s: les deux bouts doivent parler de la meme reference", query, propre)
+		}
+	})
+}
+
+// UN REFUS PEUT ARRIVER SOUS UN CODE DE SUCCÈS, et son code applicatif ne doit pas se
+// perdre.
+//
+// L'API de transaction répond déjà « status PENDING, status_code 200 » dans un corps de
+// 2xx : le statut et le code vivent dans le corps, et rien ne garantit que le lien réserve
+// ses refus aux codes 4xx. Relevé par audit : un 200 portant 3012 ressortait en « charge
+// utile inexploitable », avec Code à zéro, ce qui ne disait pas au marchand d'aller
+// rallumer son URL de redirection dans l'espace marchand.
+func TestUnRefusDansUnCorpsDeSuccesEstClasseParSonCode(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		nom               string
+		corps             string
+		wantMotif         error
+		wantCode          int
+		wantConfiguration bool
+	}{
+		{
+			nom:               "casse melee, la forme de ce point d entree",
+			corps:             `{"status":"FAILED","statusCode":3012,"error":"REDIRECTION_URL_NOT_ACTIVE","message":"url eteinte"}`,
+			wantMotif:         pvit.ErrConfiguration,
+			wantCode:          pvit.CodeRedirectionInactive,
+			wantConfiguration: true,
+		},
+		{
+			nom:       "soulignes, la forme des corps d erreur publies",
+			corps:     `{"status":"FAILED","status_code":5002,"error":"TRANSACTION_LINK_USED","message":"deja utilise"}`,
+			wantMotif: pvit.ErrDejaInitiee,
+			wantCode:  pvit.CodeLienConsomme,
+		},
+	}
+
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			t.Parallel()
+
+			client, b := nouveauBancAvecReglages(t, reglagesAmorceSeule())
+			b.programmer("link", reponse{statut: http.StatusOK, corps: c.corps})
+
+			lien, err := client.CreerLien(t.Context(), demandeLienType())
+			if !errors.Is(err, c.wantMotif) {
+				t.Fatalf("CreerLien() err = %v, want %v", err, c.wantMotif)
+			}
+
+			e, ok := errors.AsType[pvit.Erreur](err)
+			if !ok {
+				t.Fatalf("CreerLien() err = %v, want une pvit.Erreur", err)
+			}
+			if got := e.Code; got != c.wantCode {
+				t.Errorf("Erreur.Code = %d, want %d: le code applicatif est le discriminant, il ne doit pas se perdre", got, c.wantCode)
+			}
+			if got := e.EstFauteDeConfiguration(); got != c.wantConfiguration {
+				t.Errorf("EstFauteDeConfiguration() = %v, want %v", got, c.wantConfiguration)
+			}
+			if e.EstRejouable() {
+				t.Errorf("EstRejouable() = true, want false: aucun de ces refus ne se repare en rejouant")
+			}
+			if lien.Utilisable() {
+				t.Errorf("Lien.Utilisable() = true, want false")
+			}
+			if got, want := lien.Reference, pvit.Reference("REF1234567890"); got != want {
+				t.Errorf("Lien.Reference = %q, want %q: la tentative reste interrogeable", got, want)
+			}
+		})
+	}
+}
+
+// UN CORPS DE SUCCÈS SANS CODE CONNU RESTE INEXPLOITABLE, et surtout PAS rejouable.
+//
+// C'est le piège que le classement conditionnel évite. Classer un 2xx à l'aveugle le ferait
+// passer par motifDuStatut, dont le défaut est ErrIndisponible, donc rejouable : une boucle
+// de réconciliation régénérerait alors des liens de paiement sur une réponse dont personne
+// ne sait rien tirer.
+func TestUnCorpsDeSuccesSansCodeConnuResteInexploitableEtNonRejouable(t *testing.T) {
+	t.Parallel()
+
+	cas := []struct {
+		nom   string
+		corps string
+	}{
+		{nom: "aucun code", corps: `{"status":"FAILED","message":"quelque chose"}`},
+		{nom: "le code du succes", corps: `{"status":"SUCCESS","statusCode":200}`},
+		{nom: "un code que la passerelle n a jamais publie", corps: `{"statusCode":7777}`},
+		{nom: "corps vide", corps: `{}`},
+	}
+
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			t.Parallel()
+
+			client, b := nouveauBancAvecReglages(t, reglagesAmorceSeule())
+			b.programmer("link", reponse{statut: http.StatusOK, corps: c.corps})
+
+			_, err := client.CreerLien(t.Context(), demandeLienType())
+			if !errors.Is(err, pvit.ErrReponseIllisible) {
+				t.Fatalf("CreerLien(corps %q) err = %v, want ErrReponseIllisible", c.corps, err)
+			}
+			if errors.Is(err, pvit.ErrIndisponible) {
+				t.Errorf("CreerLien(corps %q) err = %v, want pas ErrIndisponible: un 2xx classe a l aveugle deviendrait rejouable", c.corps, err)
+			}
+			e, ok := errors.AsType[pvit.Erreur](err)
+			if !ok {
+				t.Fatalf("CreerLien() err = %v, want une pvit.Erreur", err)
+			}
+			if e.EstRejouable() {
+				t.Errorf("CreerLien(corps %q) EstRejouable() = true, want false", c.corps)
+			}
+		})
 	}
 }

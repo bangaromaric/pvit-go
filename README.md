@@ -259,7 +259,10 @@ Quatre points qui ne se devinent pas :
   démarrage : `CreerLien` les réclame au moment où ils servent, et nomme les deux d'un coup
   s'ils manquent.
 - **La réponse du lien est en casse mêlée avec un code entier**, là où l'API de transaction
-  répond en soulignés avec la chaîne `"200"`. Les deux formes sont lues.
+  répond en soulignés avec la chaîne `"200"`. Les deux formes sont lues, y compris par le
+  classement d'erreurs : un refus formulé dans un corps de `200` est classé par son code
+  applicatif, et non rangé en vrac derrière `ErrReponseIllisible`. Un code que la passerelle
+  n'a jamais publié reste inexploitable, et surtout **pas rejouable**.
 
 `CreerLien` sert les trois parcours du lien. `WEB` ouvre une page de paiement et rend le
 numéro du client facultatif ; `VISA_MASTERCARD` et `RESTLINK` l'exigent. `RESTFUL` y est
@@ -367,6 +370,22 @@ tierce en production, `go mod tidy`, et govulncheck s'il est installé.
 ### v0.2.0, le paiement par carte bancaire
 
 Ajout de surface, et **aucune rupture de compilation**.
+
+Deux **correctifs relevés par audit** touchent des chemins antérieurs à la carte, et valent
+d'être lus avant de monter :
+
+- **la référence part désormais TAILLÉE** sur `rest` comme sur `link`. Elle était jusqu'ici
+  taillée pour être *jugée* par la validation, puis la valeur brute partait sur le fil,
+  tandis que `Statut`, qui taille elle aussi, la redemandait sans. Une référence recopiée
+  avec une espace ou un retour à la ligne partait donc sous une forme et se redemandait sous
+  une autre : les deux moitiés d'une même tentative ne se rejoignaient plus. `Initiation`,
+  `Remboursement` et `Lien` rendent maintenant la référence telle qu'elle est partie, qui
+  est celle qu'il faut persister ;
+- **le code applicatif se lit dans les deux casses.** Les corps d'erreur publiés sont en
+  soulignés, et le classement ne déclarait que ceux là. L'API de lien répondant en casse
+  mêlée, un refus formulé dans sa propre casse rendait `Erreur.Code` à zéro et retombait sur
+  la plage du code HTTP, dont le défaut est l'indisponibilité **rejouable** : une faute de
+  configuration pouvait donc nourrir une boucle de rejeu.
 
 - `Client.CreerLien` et `Client.PayerParCarte`, avec `DemandeLien`, `DemandeCarte` et `Lien`.
   Le lien de paiement quitte la trappe de sortie, qui passe de quatre API à trois.
